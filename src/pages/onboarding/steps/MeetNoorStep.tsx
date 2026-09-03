@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NoorOrb } from '@/components/brand/NoorOrb';
+import { NoorPortrait } from '@/components/brand/NoorPortrait';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Field';
 import { useT } from '@/i18n';
@@ -18,8 +18,8 @@ export function MeetNoorStep({ initialName, busy, onStart, onDashboard }: MeetNo
 
   return (
     <div className="mx-auto flex max-w-xl flex-col items-center py-8 text-center animate-fade-up">
-      <NoorOrb state="speaking" size="lg" />
-      <p className="eyebrow mt-12">{t('onboarding.meetDesignation')}</p>
+      <NoorPortrait size="xl" ambient />
+      <p className="eyebrow mt-8">{t('onboarding.meetDesignation')}</p>
       <h1 className="mt-3 text-4xl font-medium text-ink-900">{t('onboarding.meetTitle')}</h1>
       <p className="mt-5 max-w-lg text-lg leading-relaxed text-ink-700">{t('onboarding.meetBody')}</p>
 

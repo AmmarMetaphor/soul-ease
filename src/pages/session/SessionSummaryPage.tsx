@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { NoorOrb } from '@/components/brand/NoorOrb';
+import { NoorPortrait } from '@/components/brand/NoorPortrait';
 import { Button, LinkButton } from '@/components/ui/Button';
 import { CloseIcon } from '@/components/ui/Icons';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -114,8 +114,8 @@ export function SessionSummaryPage() {
   return (
     <div className="mx-auto max-w-2xl animate-fade-up">
       <div className="flex flex-col items-center text-center">
-        <NoorOrb state="ended" size="sm" />
-        <p className="eyebrow mt-6">{t('summary.title')}</p>
+        <NoorPortrait size="md" />
+        <p className="eyebrow mt-5">{t('summary.title')}</p>
         <h1 className="mt-2 text-3xl font-medium text-ink-900">{session.title ?? t('summary.title')}</h1>
         <p className="mt-2 max-w-md text-sm text-ink-500">{t('summary.subtitle')}</p>
         <p className="mt-3 text-xs text-ink-300">

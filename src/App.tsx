@@ -14,6 +14,7 @@ import { ResetPasswordPage } from '@/pages/auth/ResetPasswordPage';
 import { SignupPage } from '@/pages/auth/SignupPage';
 import { VerifyEmailPage } from '@/pages/auth/VerifyEmailPage';
 import { DashboardPage } from '@/pages/dashboard/DashboardPage';
+import { VoiceAuditionPage } from '@/pages/dev/VoiceAuditionPage';
 import { GoalsPage } from '@/pages/goals/GoalsPage';
 import { SessionDetailPage } from '@/pages/history/SessionDetailPage';
 import { SessionHistoryPage } from '@/pages/history/SessionHistoryPage';
@@ -73,6 +74,8 @@ export function AppRoutes() {
             <Route path={ROUTES.settings} element={<SettingsPage />} />
             <Route path={ROUTES.memory} element={<MemorySettingsPage />} />
             <Route path={ROUTES.deleteAccount} element={<DeleteAccountPage />} />
+            {/* Development only: the page itself redirects when dev tools are off. */}
+            <Route path={ROUTES.devVoiceAudition} element={<VoiceAuditionPage />} />
           </Route>
         </Route>
       </Route>

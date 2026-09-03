@@ -8,6 +8,8 @@ interface ImportMetaEnv {
   readonly VITE_PUBLIC_SITE_URL?: string;
   readonly VITE_REALTIME_PROVIDER?: string;
   readonly VITE_ROUTER_MODE?: string;
+  readonly VITE_NOOR_VOICE?: string;
+  readonly VITE_ENABLE_DEV_TOOLS?: string;
 }
 
 interface ImportMeta {

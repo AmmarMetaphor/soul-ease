@@ -42,11 +42,23 @@ export const env = {
    * — used for standalone preview builds.
    */
   routerMode: (import.meta.env.VITE_ROUTER_MODE?.trim() === 'hash' ? 'hash' : 'browser') as 'browser' | 'hash',
-  /** 'demo' (default) or 'openai' — the latter is a Phase 2 scaffold. */
-  realtimeProvider: (import.meta.env.VITE_REALTIME_PROVIDER?.trim() === 'openai' ? 'openai' : 'demo') as
-    | 'demo'
-    | 'openai',
+  /**
+   * 'auto' (default) tries live realtime voice and falls back to the demo
+   * guide only when the deployment has no realtime credentials.
+   * 'demo' pins the demo guide; 'openai' pins realtime with no fallback.
+   */
+  realtimeProvider: ((): 'auto' | 'demo' | 'openai' => {
+    const raw = import.meta.env.VITE_REALTIME_PROVIDER?.trim();
+    return raw === 'demo' || raw === 'openai' ? raw : 'auto';
+  })(),
   isDev: import.meta.env.DEV,
+  /**
+   * Developer tools (voice audition, realtime diagnostics). On in dev builds;
+   * in a deployed preview it must be opted into explicitly. Never on for
+   * ordinary production users.
+   */
+  devToolsEnabled:
+    import.meta.env.DEV || readBool(import.meta.env.VITE_ENABLE_DEV_TOOLS),
 } as const;
 
 export function siteOrigin(): string {
