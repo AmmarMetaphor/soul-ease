@@ -147,19 +147,37 @@ interface VerifiedCaller {
   via: 'supabase' | 'preview';
 }
 
-async function verifyCaller(request: Request, env: RealtimeEnv): Promise<VerifiedCaller | null> {
+/**
+ * Why a caller could not be verified. These are deliberately distinct:
+ *
+ *  - `auth_not_configured` is a DEPLOYMENT problem. The server has no Supabase
+ *    configuration, so it cannot verify anybody — including a member who is
+ *    perfectly well signed in. Reporting this as "you need to sign in" sends
+ *    the member off to fix something that is not theirs to fix, which is the
+ *    bug this distinction exists to prevent.
+ *  - `no_token` means the request genuinely arrived without a bearer token.
+ *  - `token_rejected` means Supabase declined the token (invalid or expired).
+ *  - `auth_unreachable` means Supabase itself could not be reached.
+ */
+export type VerifyFailure = 'auth_not_configured' | 'no_token' | 'token_rejected' | 'auth_unreachable';
+
+type VerifyResult = { ok: true; caller: VerifiedCaller } | { ok: false; failure: VerifyFailure };
+
+async function verifyCaller(request: Request, env: RealtimeEnv): Promise<VerifyResult> {
   const supabaseUrl = env.SUPABASE_URL?.trim();
   const anonKey = env.SUPABASE_ANON_KEY?.trim();
 
   if (!supabaseUrl || !anonKey) {
-    return env.ALLOW_UNAUTHENTICATED_REALTIME?.trim().toLowerCase() === 'true'
-      ? { userId: null, via: 'preview' }
-      : null;
+    // An explicit preview opt-in is the only way to mint without a member.
+    if (env.ALLOW_UNAUTHENTICATED_REALTIME?.trim().toLowerCase() === 'true') {
+      return { ok: true, caller: { userId: null, via: 'preview' } };
+    }
+    return { ok: false, failure: 'auth_not_configured' };
   }
 
   const header = request.headers.get('authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  if (!token) return null;
+  if (!token) return { ok: false, failure: 'no_token' };
 
   // Plain fetch against Supabase's user endpoint — no SDK, so this bundles
   // identically on every host. The anon key alone grants nothing; the JWT is
@@ -170,12 +188,41 @@ async function verifyCaller(request: Request, env: RealtimeEnv): Promise<Verifie
       headers: { Authorization: `Bearer ${token}`, apikey: anonKey },
     });
   } catch {
-    return null;
+    return { ok: false, failure: 'auth_unreachable' };
   }
-  if (!response.ok) return null;
+  if (!response.ok) return { ok: false, failure: 'token_rejected' };
   const user = (await response.json()) as { id?: string };
-  if (!user?.id) return null;
-  return { userId: user.id, via: 'supabase' };
+  if (!user?.id) return { ok: false, failure: 'token_rejected' };
+  return { ok: true, caller: { userId: user.id, via: 'supabase' } };
+}
+
+/**
+ * Configuration readiness — booleans only, never a value.
+ *
+ * Served on GET so an operator can see at a glance which variables a
+ * deployment is actually missing, which is otherwise invisible from the
+ * outside and easy to get wrong per deploy context (production vs preview).
+ */
+export function readinessReport(env: RealtimeEnv) {
+  const openaiConfigured = !!env.OPENAI_API_KEY?.trim();
+  const supabaseConfigured = !!env.SUPABASE_URL?.trim() && !!env.SUPABASE_ANON_KEY?.trim();
+  const previewOptIn = env.ALLOW_UNAUTHENTICATED_REALTIME?.trim().toLowerCase() === 'true';
+  const missing: string[] = [];
+  if (!openaiConfigured) missing.push('OPENAI_API_KEY');
+  if (!supabaseConfigured && !previewOptIn) {
+    if (!env.SUPABASE_URL?.trim()) missing.push('SUPABASE_URL');
+    if (!env.SUPABASE_ANON_KEY?.trim()) missing.push('SUPABASE_ANON_KEY');
+  }
+  return {
+    endpoint: 'realtime-session',
+    realtimeReady: openaiConfigured && (supabaseConfigured || previewOptIn),
+    openaiConfigured,
+    supabaseVerificationConfigured: supabaseConfigured,
+    unauthenticatedPreviewOptIn: previewOptIn,
+    model: env.OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL,
+    voice: resolveVoice(undefined, env),
+    missing,
+  };
 }
 
 async function readBody(request: Request): Promise<MintRequestBody> {
@@ -199,14 +246,23 @@ async function readBody(request: Request): Promise<MintRequestBody> {
  *
  * Status codes the client relies on:
  *   405 wrong method
- *   401 caller could not be verified
- *   503 realtime not configured on this deployment (falls back to demo)
+ *   401 the CALLER is at fault — no token, or a token Supabase rejected
+ *   503 this DEPLOYMENT cannot do realtime (no API key, or no way to verify
+ *       members). The client falls back to the demo guide and says so.
  *   502 upstream refused or returned an unexpected payload
  *   200 { clientSecret, expiresAt, model, voice, callsUrl }
+ *
+ * The 401/503 split matters: a misconfigured deployment must never tell a
+ * signed-in member that they are not signed in.
  */
 export async function handleRealtimeSessionRequest(request: Request, env: RealtimeEnv): Promise<Response> {
   if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: { allow: 'POST, OPTIONS' } });
+    return new Response(null, { status: 204, headers: { allow: 'GET, POST, OPTIONS' } });
+  }
+  // Readiness report: booleans only, so a deployment can be diagnosed from
+  // the outside without exposing any value.
+  if (request.method === 'GET') {
+    return json(200, readinessReport(env));
   }
   if (request.method !== 'POST') {
     return json(405, { error: 'method_not_allowed' });
@@ -216,13 +272,34 @@ export async function handleRealtimeSessionRequest(request: Request, env: Realti
   if (!apiKey) {
     return json(503, {
       error: 'realtime_not_configured',
+      reason: 'openai_key_missing',
       message: 'Realtime voice is not configured on this deployment.',
     });
   }
 
-  const caller = await verifyCaller(request, env);
-  if (!caller) {
-    return json(401, { error: 'unauthorised' });
+  const verified = await verifyCaller(request, env);
+  if (!verified.ok) {
+    switch (verified.failure) {
+      case 'auth_not_configured':
+        // A deployment problem, not the member's. 503 so the client offers a
+        // working demo conversation instead of a misleading sign-in prompt.
+        return json(503, {
+          error: 'realtime_not_configured',
+          reason: 'auth_not_configured',
+          message: 'This deployment cannot verify members, so realtime voice is unavailable.',
+        });
+      case 'auth_unreachable':
+        return json(503, {
+          error: 'realtime_not_configured',
+          reason: 'auth_unreachable',
+          message: 'The sign-in service could not be reached, so realtime voice is unavailable.',
+        });
+      case 'token_rejected':
+        return json(401, { error: 'unauthorised', reason: 'token_rejected' });
+      case 'no_token':
+      default:
+        return json(401, { error: 'unauthorised', reason: 'no_token' });
+    }
   }
 
   const body = await readBody(request);

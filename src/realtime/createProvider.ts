@@ -26,6 +26,9 @@ export function createRealtimeProvider(deps: ProviderFactoryDeps): RealtimeConve
   return new OpenAIRealtimeProvider({
     getAccessToken: deps.getAccessToken,
     voiceOverride: deps.voiceOverride,
+    // Demo mode has no member identity to send, so a refusal from the token
+    // endpoint must not be reported to the member as a sign-in problem.
+    canAuthenticate: !env.isDemoMode,
   });
 }
 

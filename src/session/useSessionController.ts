@@ -329,7 +329,9 @@ export function useSessionController(initialMode: InteractionMode) {
           const micDenied = err instanceof RealtimeError && err.code === 'microphone_denied';
           patch({
             phase: 'failed',
-            error: err instanceof Error ? err.message : 'connect_failed',
+            // A stable code, so the UI can say what actually went wrong
+            // rather than reusing one message for every failure.
+            error: err instanceof RealtimeError ? err.code : 'connect_failed',
             // Only narrow the mic state when we actually learned something.
             ...(micDenied ? { micPermission: 'denied' as const } : {}),
           });
@@ -344,7 +346,10 @@ export function useSessionController(initialMode: InteractionMode) {
           await provider.connect(connectOptions);
         } catch (fallbackError) {
           unsubscribe();
-          patch({ phase: 'failed', error: fallbackError instanceof Error ? fallbackError.message : 'connect_failed' });
+          patch({
+            phase: 'failed',
+            error: fallbackError instanceof RealtimeError ? fallbackError.code : 'connect_failed',
+          });
           return;
         }
       }

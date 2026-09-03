@@ -113,12 +113,43 @@ describe('buildSessionConfig', () => {
 });
 
 describe('handleRealtimeSessionRequest', () => {
-  it('rejects anything but POST', async () => {
+  it('rejects anything but GET/POST', async () => {
     const response = await handleRealtimeSessionRequest(
-      new Request('https://x/api/realtime/session', { method: 'GET' }),
+      new Request('https://x/api/realtime/session', { method: 'DELETE' }),
       BASE_ENV,
     );
     expect(response.status).toBe(405);
+  });
+
+  describe('readiness report (GET)', () => {
+    it('names the missing variables without exposing a single value', async () => {
+      const response = await handleRealtimeSessionRequest(
+        new Request('https://x/api/realtime/session', { method: 'GET' }),
+        { OPENAI_REALTIME_MODEL: 'gpt-realtime-2.1' },
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        realtimeReady: false,
+        openaiConfigured: false,
+        supabaseVerificationConfigured: false,
+      });
+      expect(body.missing).toEqual(['OPENAI_API_KEY', 'SUPABASE_URL', 'SUPABASE_ANON_KEY']);
+      // Booleans and names only — never a secret value.
+      const text = JSON.stringify(body);
+      expect(text).not.toContain('sk-');
+      expect(text).not.toContain('anon-key');
+    });
+
+    it('reports a fully configured deployment as ready', async () => {
+      const response = await handleRealtimeSessionRequest(
+        new Request('https://x/api/realtime/session', { method: 'GET' }),
+        BASE_ENV,
+      );
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ realtimeReady: true, missing: [] });
+      expect(JSON.stringify(body)).not.toContain(BASE_ENV.OPENAI_API_KEY!);
+    });
   });
 
   it('answers 503 when the deployment has no API key, so the client falls back', async () => {
@@ -131,9 +162,10 @@ describe('handleRealtimeSessionRequest', () => {
     vi.stubGlobal('fetch', stubHappyPath());
     const response = await handleRealtimeSessionRequest(post({}, {}), BASE_ENV);
     expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: 'unauthorised', reason: 'no_token' });
   });
 
-  it('refuses a caller whose JWT Supabase rejects', async () => {
+  it('reports a rejected token distinctly, so the UI can say "signed out" not "not signed in"', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
@@ -143,11 +175,42 @@ describe('handleRealtimeSessionRequest', () => {
     );
     const response = await handleRealtimeSessionRequest(post(), BASE_ENV);
     expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ reason: 'token_rejected' });
   });
 
-  it('refuses by default when Supabase is not configured (no open door to the API key)', async () => {
+  /**
+   * The Deploy Preview bug: a member was genuinely signed in and sent a valid
+   * bearer token, but the deployment had no SUPABASE_URL/ANON_KEY, so the
+   * server could not verify anyone and answered 401 — which the UI showed as
+   * "You need to be signed in". A deployment problem must never be reported
+   * as the member's auth problem.
+   */
+  it('does NOT return 401 when the server itself cannot verify anyone', async () => {
     const response = await handleRealtimeSessionRequest(post(), { OPENAI_API_KEY: 'sk-test' });
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: 'realtime_not_configured',
+      reason: 'auth_not_configured',
+    });
+  });
+
+  it('treats an unreachable auth service as a deployment problem, not a sign-in problem', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('/auth/v1/user')) throw new Error('network down');
+        throw new Error('should not reach OpenAI');
+      }),
+    );
+    const response = await handleRealtimeSessionRequest(post(), BASE_ENV);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'auth_unreachable' });
+  });
+
+  it('still refuses to mint without a verified member (verification is not bypassed)', async () => {
+    // No Supabase config and no opt-in: the API key must never be reachable.
+    const response = await handleRealtimeSessionRequest(post(), { OPENAI_API_KEY: 'sk-test' });
+    expect(response.status).not.toBe(200);
   });
 
   it('allows an explicitly opted-in preview with no Supabase', async () => {

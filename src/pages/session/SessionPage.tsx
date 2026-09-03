@@ -104,21 +104,34 @@ export function SessionPage() {
       <SessionFrame>
         <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5">
           <NoorPortrait size="md" className="mb-6 self-center" />
-          <h1 className="text-center text-2xl font-medium text-ink-900">{t('session.failedTitle')}</h1>
+          <h1 className="text-center text-2xl font-medium text-ink-900">
+            {needsSignIn(state.error) ? t('session.signInTitle') : t('session.failedTitle')}
+          </h1>
           <p className="mt-2 text-center leading-relaxed text-ink-700">{errorMessage(state.error, t)}</p>
           <div className="mt-8 flex flex-col gap-2">
-            <Button onClick={() => void controller.retry()}>{t('session.tryAgain')}</Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                void controller.retry().then(() => controller.connect('text'));
-              }}
-            >
-              {t('session.continueByText')}
-            </Button>
-            <Button variant="ghost" onClick={() => void finish()}>
-              {t('session.endSafely')}
-            </Button>
+            {needsSignIn(state.error) ? (
+              <>
+                <LinkButton to={ROUTES.login}>{t('common.signIn')}</LinkButton>
+                <LinkButton to={ROUTES.dashboard} variant="ghost">
+                  {t('summary.returnHome')}
+                </LinkButton>
+              </>
+            ) : (
+              <>
+                <Button onClick={() => void controller.retry()}>{t('session.tryAgain')}</Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    void controller.retry().then(() => controller.connect('text'));
+                  }}
+                >
+                  {t('session.continueByText')}
+                </Button>
+                <Button variant="ghost" onClick={() => void finish()}>
+                  {t('session.endSafely')}
+                </Button>
+              </>
+            )}
           </div>
         </main>
         <DiagnosticsPanel
@@ -366,13 +379,34 @@ function statusHint(state: SessionControllerState, t: TranslateFn): string | und
   return undefined;
 }
 
-/** Translate controller error codes; pass through anything already readable. */
+/**
+ * Translate controller error codes into an accurate member-facing message.
+ *
+ * Each failure gets its own wording: a misconfigured voice backend must never
+ * tell a signed-in member that they are not signed in, and an internal server
+ * message is never shown to a member.
+ */
 function errorMessage(error: string | null, t: TranslateFn): string {
   switch (error) {
     case null:
       return '';
+    case 'not_signed_in':
+      return t('session.errNotSignedIn');
+    case 'session_expired':
+      return t('session.errSessionExpired');
+    case 'not_configured':
+    case 'credential_failed':
+    case 'not_implemented':
+      return t('session.errVoiceUnavailable');
+    case 'connection_failed':
     case 'connection_lost':
-      return t('session.connectionLost');
+      return t('session.errNetwork');
+    case 'microphone_denied':
+      return t('session.micDeniedBody');
+    case 'microphone_unavailable':
+      return t('session.micUnavailableBody');
+    case 'unsupported_browser':
+      return t('session.unsupportedBody');
     case 'session_start_failed':
       return t('errors.sessionStartFailed');
     case 'connect_failed':
@@ -380,6 +414,12 @@ function errorMessage(error: string | null, t: TranslateFn): string {
     case 'save_failed':
       return t('errors.saveFailed');
     default:
-      return error;
+      // Never surface an internal message; say something true and generic.
+      return t('session.connectFailed');
   }
+}
+
+/** Signing in again only helps when that is genuinely the problem. */
+function needsSignIn(error: string | null): boolean {
+  return error === 'not_signed_in' || error === 'session_expired';
 }

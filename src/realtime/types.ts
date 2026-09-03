@@ -34,6 +34,10 @@ export type RealtimeErrorCode =
   | 'microphone_denied'
   | 'microphone_unavailable'
   | 'connection_failed'
+  /** No signed-in member: the request carried no token. */
+  | 'not_signed_in'
+  /** A token was sent but the auth service rejected it (invalid or expired). */
+  | 'session_expired'
   | 'credential_failed'
   | 'unknown';
 

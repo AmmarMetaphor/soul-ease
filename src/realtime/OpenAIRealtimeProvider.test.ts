@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAIRealtimeProvider } from './OpenAIRealtimeProvider';
-import type { RealtimeEvent } from './types';
+import type { RealtimeError, RealtimeEvent } from './types';
 
 /**
  * Barge-in and turn handling, exercised against a simulated WebRTC stack.
@@ -192,18 +192,84 @@ describe('connection', () => {
     ).rejects.toMatchObject({ code: 'not_configured', recoverable: true });
   });
 
-  it('does not fall back when the member is simply not signed in', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('unauthorised', { status: 401 })));
-    const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => null });
-    await expect(
-      provider.connect({
-        mode: 'text',
-        preferredLanguage: 'en',
-        memoryContext: [],
-        instructions: 'x',
-        openGently: false,
-      }),
-    ).rejects.toMatchObject({ code: 'credential_failed', recoverable: false });
+  const CONNECT = {
+    mode: 'text' as const,
+    preferredLanguage: 'en' as const,
+    memoryContext: [],
+    instructions: 'x',
+    openGently: false,
+  };
+
+  it('reports not signed in when real auth exists and no token was sent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: 'unauthorised', reason: 'no_token' }), { status: 401 })),
+    );
+    const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => null, canAuthenticate: true });
+    await expect(provider.connect(CONNECT)).rejects.toMatchObject({
+      code: 'not_signed_in',
+      recoverable: false,
+    });
+  });
+
+  it('reports an expired session distinctly when the token was rejected', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () => new Response(JSON.stringify({ error: 'unauthorised', reason: 'token_rejected' }), { status: 401 }),
+      ),
+    );
+    const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => 'stale', canAuthenticate: true });
+    await expect(provider.connect(CONNECT)).rejects.toMatchObject({
+      code: 'session_expired',
+      recoverable: false,
+    });
+  });
+
+  /**
+   * In demo mode there is no member identity to send, so the member cannot fix
+   * a 401 by signing in. It must read as "no realtime here" and fall back —
+   * not as a sign-in prompt to someone who is already "logged in".
+   */
+  it('treats a 401 as "no realtime here" when the deployment has no real auth', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'unauthorised' }), { status: 401 })));
+    const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => null, canAuthenticate: false });
+    await expect(provider.connect(CONNECT)).rejects.toMatchObject({
+      code: 'not_configured',
+      recoverable: true,
+    });
+  });
+
+  it('falls back rather than throwing a parse error when a rewrite serves HTML', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('<!doctype html><html><body>index</body></html>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          }),
+      ),
+    );
+    const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => 'jwt', canAuthenticate: true });
+    await expect(provider.connect(CONNECT)).rejects.toMatchObject({
+      code: 'not_configured',
+      recoverable: true,
+    });
+  });
+
+  it('never shows an internal server message for a 500', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('TypeError at line 42 of handler.js', { status: 500 })));
+    const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => 'jwt', canAuthenticate: true });
+    const error = await provider.connect(CONNECT).then(
+      () => null,
+      (e: unknown) => e as RealtimeError,
+    );
+    expect(error).not.toBeNull();
+    if (!error) return;
+    expect(error.code).toBe('credential_failed');
+    expect(error.message).not.toMatch(/TypeError|handler\.js/);
+    expect(error.message).toContain("Noor's voice session");
   });
 });
 

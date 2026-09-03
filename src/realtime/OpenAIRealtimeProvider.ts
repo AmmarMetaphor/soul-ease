@@ -44,6 +44,13 @@ export interface OpenAIRealtimeProviderDeps {
   tokenEndpoint?: string;
   /** Developer voice override, used only by the audition page. */
   voiceOverride?: string;
+  /**
+   * Whether this deployment has real authentication at all (Supabase
+   * configured). In demo mode there is no member identity to obtain, so a 401
+   * is a property of the deployment rather than something the member can fix
+   * by signing in — it must lead to the demo guide, never to a sign-in prompt.
+   */
+  canAuthenticate?: boolean;
 }
 
 interface MintedSession {
@@ -59,6 +66,16 @@ type Listener = (event: RealtimeEvent) => void;
 interface RealtimeServerEvent {
   type: string;
   [key: string]: unknown;
+}
+
+/** Read the server's failure reason, tolerating a non-JSON body. */
+async function readReason(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { reason?: string };
+    return body?.reason ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
@@ -156,22 +173,40 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
       throw new RealtimeError('connection_failed', 'Could not reach the Soul Ease server.', true);
     }
 
-    // 503: configured host, no API key. 404: no server function deployed at
-    // all (a purely static preview). Both mean "no realtime here" and should
-    // fall back to the demo guide rather than failing the session.
+    // 503: this deployment cannot do realtime (no API key, or no way to
+    // verify members). 404: no server function deployed at all. Both mean
+    // "no realtime here" — fall back to the demo guide rather than failing.
     if (response.status === 503 || response.status === 404) {
       throw new RealtimeError('not_configured', 'Realtime voice is not configured on this deployment.', true);
     }
-    if (response.status === 401) {
-      throw new RealtimeError('credential_failed', 'You need to be signed in to start a live session.', false);
-    }
-    if (!response.ok) {
-      throw new RealtimeError('credential_failed', 'The realtime service is unavailable right now.', true);
+
+    if (response.status === 401 || response.status === 403) {
+      // Without real authentication the member cannot resolve a 401 by
+      // signing in, so this is a deployment issue, not an auth issue.
+      if (this.deps.canAuthenticate === false) {
+        throw new RealtimeError('not_configured', 'Realtime voice is unavailable on this deployment.', true);
+      }
+      const reason = await readReason(response);
+      throw reason === 'token_rejected'
+        ? new RealtimeError('session_expired', 'Your session has expired. Please sign in again.', false)
+        : new RealtimeError('not_signed_in', 'You need to be signed in to start a live session.', false);
     }
 
-    const body = (await response.json()) as Partial<MintedSession>;
+    if (!response.ok) {
+      throw new RealtimeError('credential_failed', "We couldn't start Noor's voice session right now.", true);
+    }
+
+    // A non-JSON 200 means something other than our function answered — a
+    // host rewrite serving index.html, for example. Treat it as "no realtime
+    // here" instead of surfacing a JSON parse error.
+    let body: Partial<MintedSession>;
+    try {
+      body = (await response.json()) as Partial<MintedSession>;
+    } catch {
+      throw new RealtimeError('not_configured', 'The realtime endpoint did not respond as expected.', true);
+    }
     if (!body.clientSecret || !body.callsUrl) {
-      throw new RealtimeError('credential_failed', 'The realtime service returned an unexpected response.', true);
+      throw new RealtimeError('credential_failed', "We couldn't start Noor's voice session right now.", true);
     }
     return {
       clientSecret: body.clientSecret,

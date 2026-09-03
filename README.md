@@ -219,6 +219,51 @@ Local development with the function running:
 npm run build && npx wrangler pages dev dist
 ```
 
+## Diagnosing a deployment
+
+`GET /api/realtime/session` returns a readiness report — booleans and variable
+names only, never a value:
+
+```bash
+curl https://<your-site>/api/realtime/session
+```
+
+```json
+{
+  "realtimeReady": false,
+  "openaiConfigured": true,
+  "supabaseVerificationConfigured": false,
+  "unauthenticatedPreviewOptIn": false,
+  "model": "gpt-realtime-2.1",
+  "voice": "marin",
+  "missing": ["SUPABASE_URL", "SUPABASE_ANON_KEY"]
+}
+```
+
+- `realtimeReady: true` and `missing: []` → live voice will work.
+- Anything in `missing` is a variable that deploy context does not have.
+- A 404 instead of JSON means the function is not deployed to that context.
+
+**Environment variables are per deploy context.** Variables added only to
+Production are *not* present in Deploy Previews, and the effect is invisible
+from the outside: the site loads, sign-in works, and only the voice session
+fails. On Netlify, set them for "Deploy previews" (and "Branch deploys") as
+well as Production; on Cloudflare, add them to both Production and Preview.
+
+### How failures are reported to the member
+
+The endpoint separates the member's problem from the deployment's, because a
+misconfigured server must never tell a signed-in member to sign in:
+
+| Situation | Status | What the member sees |
+| --- | --- | --- |
+| No bearer token sent | `401 no_token` | “You need to be signed in to start a live session.” |
+| Token rejected by Supabase | `401 token_rejected` | “Your session has expired. Please sign in again.” |
+| Server has no Supabase config | `503 auth_not_configured` | Voice unavailable — the conversation continues by text/demo |
+| Supabase unreachable | `503 auth_unreachable` | Voice unavailable — as above |
+| No `OPENAI_API_KEY` | `503 openai_key_missing` | Voice unavailable — as above |
+| Upstream or network failure | `502` / fetch error | “We couldn't reach the voice service…” |
+
 ## Netlify deployment
 
 1. Push this repository to GitHub.
@@ -228,8 +273,12 @@ npm run build && npx wrangler pages dev dist
 3. Under **Site configuration → Environment variables** add the variables from
    the table above (at minimum the two `VITE_SUPABASE_*` values — or none, to
    review the site in demo mode).
-4. Every pull request gets a **Deploy Preview** URL automatically. Open the PR
-   for `claude/soul-ease-phase-1-ffxijs` and follow the Netlify check link.
+4. Every pull request gets a **Deploy Preview** URL automatically; follow the
+   Netlify check link on the PR. **Add the environment variables to the
+   "Deploy previews" context too** — variables scoped only to Production are
+   absent in previews, which makes sign-in work while the voice session
+   fails. Check with `GET /api/realtime/session` (see
+   [Diagnosing a deployment](#diagnosing-a-deployment)).
 5. SPA routing: `netlify.toml` rewrites `/*` to `/index.html`, so refreshing
    `/app/journal` works. Security headers are also set there.
 
