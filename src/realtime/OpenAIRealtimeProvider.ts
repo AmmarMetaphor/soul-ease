@@ -37,6 +37,19 @@ import {
 const DATA_CHANNEL = 'oai-events';
 const DEFAULT_TOKEN_ENDPOINT = '/api/realtime/session';
 const MAX_RECONNECT_ATTEMPTS = 2;
+/**
+ * Turns re-seeded into a new session after a reconnection. Enough that the
+ * member can carry on saying "she" and Noor still knows who they mean;
+ * bounded so a long session never grows an unbounded payload.
+ */
+const RESEED_TURNS = 12;
+/** How long to wait for the server to acknowledge a typed item before giving up. */
+const ITEM_ACK_TIMEOUT_MS = 2000;
+
+interface SeedTurn {
+  role: 'user' | 'noor';
+  text: string;
+}
 
 export interface OpenAIRealtimeProviderDeps {
   /** Returns the member's current Supabase access token, or null in demo mode. */
@@ -46,9 +59,10 @@ export interface OpenAIRealtimeProviderDeps {
   voiceOverride?: string;
   /**
    * Whether this deployment has real authentication at all (Supabase
-   * configured). In demo mode there is no member identity to obtain, so a 401
-   * is a property of the deployment rather than something the member can fix
-   * by signing in — it must lead to the demo guide, never to a sign-in prompt.
+   * configured). Without it there is no member identity to obtain, so a 401 is
+   * a property of the deployment rather than something the member can fix by
+   * signing in — it must be reported as the voice being unavailable, never as
+   * a sign-in prompt to someone who has nothing to sign in with.
    */
   canAuthenticate?: boolean;
 }
@@ -122,6 +136,19 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
   private micMuted = false;
   private paused = false;
 
+  /**
+   * Completed turns on both sides, in order. The realtime session holds its
+   * own conversation state, so this is not used during a healthy session — it
+   * exists so a reconnection can re-seed what was already said. Without it
+   * every dropout silently restarted the conversation from nothing, which
+   * looks exactly like Noor ignoring everything the member had told her.
+   */
+  private history: SeedTurn[] = [];
+  /** True while this session was rebuilt after a dropout, not freshly opened. */
+  private resumed = false;
+  /** Typed items awaiting `conversation.item.created` before a response is asked for. */
+  private pendingItems = new Map<string, { timer: number }>();
+
   constructor(private readonly deps: OpenAIRealtimeProviderDeps) {
     this.tokenEndpoint = deps.tokenEndpoint ?? DEFAULT_TOKEN_ENDPOINT;
   }
@@ -134,6 +161,14 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
   }
 
   private emit(event: RealtimeEvent): void {
+    // Every completed turn is remembered here as well as being handed to the
+    // UI, so a reconnection can rebuild the conversation instead of starting
+    // a new one. Kept bounded — only the tail is ever re-seeded.
+    if (event.type === 'turn_completed' && event.turn.text.trim()) {
+      this.history = [...this.history, { role: event.turn.role, text: event.turn.text }].slice(-RESEED_TURNS * 2);
+      diagnostics.bumpStatus('conversationTurnCount');
+      if (event.turn.role === 'user') diagnostics.bumpStatus('userTurnCount');
+    }
     for (const listener of this.listeners) listener(event);
   }
 
@@ -175,7 +210,8 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
 
     // 503: this deployment cannot do realtime (no API key, or no way to
     // verify members). 404: no server function deployed at all. Both mean
-    // "no realtime here" — fall back to the demo guide rather than failing.
+    // "no realtime here", which the session screen states plainly. Nothing
+    // stands in for the conversation.
     if (response.status === 503 || response.status === 404) {
       throw new RealtimeError('not_configured', 'Realtime voice is not configured on this deployment.', true);
     }
@@ -183,6 +219,7 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
     if (response.status === 401 || response.status === 403) {
       // Without real authentication the member cannot resolve a 401 by
       // signing in, so this is a deployment issue, not an auth issue.
+      // Reported as unavailable, not as a sign-in failure.
       if (this.deps.canAuthenticate === false) {
         throw new RealtimeError('not_configured', 'Realtime voice is unavailable on this deployment.', true);
       }
@@ -290,6 +327,13 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
   async connect(options: RealtimeConnectOptions): Promise<void> {
     this.options = options;
     this.closed = false;
+    this.history = [];
+    this.resumed = false;
+    diagnostics.resetStatus({
+      demoMode: false,
+      engine: this.kind,
+      instructionChars: options.instructions.length,
+    });
     this.setState('connecting');
     this.emit({ type: 'connection', state: 'connecting' });
 
@@ -383,6 +427,33 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
     this.emit({ type: 'connection', state: 'connected', detail: 'webrtc' });
   }
 
+  /**
+   * Rebuild the conversation in a freshly minted session.
+   *
+   * A realtime session's history lives on the server and dies with the
+   * session, so a reconnection starts a model that has never heard this
+   * member. Re-seeding the recent turns is what keeps "she" pointing at the
+   * sister they mentioned four turns ago instead of at nothing.
+   *
+   * No response is requested afterwards: the member is mid-conversation and
+   * an unprompted turn on reconnection would talk over them.
+   */
+  private reseedHistory(): void {
+    const turns = this.history.slice(-RESEED_TURNS);
+    if (turns.length === 0) return;
+    for (const turn of turns) {
+      this.sendEvent({
+        type: 'conversation.item.create',
+        item:
+          turn.role === 'user'
+            ? { type: 'message', role: 'user', content: [{ type: 'input_text', text: turn.text }] }
+            : { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: turn.text }] },
+      });
+    }
+    diagnostics.setStatus({ historyReseededTurns: turns.length });
+    diagnostics.push('turn', 'history re-seeded', `turns=${turns.length}`);
+  }
+
   private attachRemoteAudio(stream: MediaStream): void {
     if (!this.audioEl) {
       const el = document.createElement('audio');
@@ -406,6 +477,8 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
   }
 
   private onChannelOpen(): void {
+    diagnostics.setStatus({ realtimeConnected: true });
+
     // The client secret already carries voice, model and instructions. This
     // update is the place to refine anything that may legitimately change
     // during a session (instructions), never voice or model.
@@ -413,20 +486,44 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
       type: 'session.update',
       session: {
         type: 'realtime',
-        instructions: this.options?.instructions,
+        instructions: this.currentInstructions(),
       },
     });
+
+    // Order matters: history first, so anything the model is asked for next
+    // is answered with the conversation already in place.
+    if (this.resumed) this.reseedHistory();
 
     this.setState('ready');
     if (this.options?.mode === 'audio' && !this.micMuted) {
       this.setState('listening');
     }
 
-    // Noor opens the conversation rather than waiting to be spoken to.
-    if (this.options?.greetFirst !== false) {
+    // Noor opens the conversation rather than waiting to be spoken to. On a
+    // reconnection she does not: the member was already talking, and greeting
+    // them again is how a dropout turns into "she keeps starting over".
+    if (this.options?.greetFirst !== false && !this.resumed) {
       this.sendEvent({ type: 'response.create' });
       diagnostics.push('turn', 'requested opening turn');
     }
+  }
+
+  /**
+   * The instruction block for the session as it currently stands.
+   *
+   * Anything that re-sends instructions mid-session (a safety transition, for
+   * one) must go through here, or a reconnected session would quietly lose the
+   * note telling Noor she is mid-conversation and start greeting the member
+   * again.
+   */
+  private currentInstructions(): string {
+    const base = this.options?.instructions ?? '';
+    if (!this.resumed) return base;
+    return [
+      base,
+      '# Continuing',
+      'The connection dropped for a moment and has just been restored. You are in the middle of this conversation, not at the start of one. Do not greet the member, do not introduce yourself, and do not ask what brought them here. The turns above are what has already been said — pick up from the most recent one.',
+    ].join('\n\n');
   }
 
   /* ─── Server events ─────────────────────────────────────────────────── */
@@ -448,6 +545,9 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
       /* ── User speech ── */
       case 'input_audio_buffer.speech_started': {
         diagnostics.push('turn', 'user speech started');
+        // A new turn is beginning: the previous turn's transcript no longer
+        // describes what the model is about to answer.
+        diagnostics.setStatus({ currentUserTurnReceived: false, userTranscriptAvailable: false });
         this.emit({ type: 'user_speech_started' });
         // Barge-in: the member has started talking over Noor.
         if (this.state === 'speaking') this.performBargeIn();
@@ -457,6 +557,22 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
       case 'input_audio_buffer.speech_stopped': {
         diagnostics.push('turn', 'user speech stopped');
         this.emit({ type: 'user_speech_stopped' });
+        break;
+      }
+      case 'input_audio_buffer.committed': {
+        // The member's audio is now a conversation item. Anything the model
+        // says after this is answering that turn, not answering nothing.
+        diagnostics.push('turn', 'user audio committed');
+        diagnostics.setStatus({ currentUserTurnReceived: true });
+        break;
+      }
+      case 'conversation.item.created': {
+        const item = event.item as { id?: string; role?: string } | undefined;
+        diagnostics.setStatus({ conversationItemCreated: true });
+        if (item?.role === 'user') diagnostics.setStatus({ currentUserTurnReceived: true });
+        // A typed turn waits for this acknowledgement before a reply is asked
+        // for, so the model is never asked to respond to an empty conversation.
+        if (item?.id) this.resolvePendingItem(item.id);
         break;
       }
 
@@ -482,6 +598,9 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
         this.userText.delete(itemId);
         if (!text) break;
         const language = detectLanguage(text);
+        // Length and detected language only — never the words themselves.
+        diagnostics.setStatus({ userTranscriptAvailable: true, lastUserTranscriptChars: text.length });
+        diagnostics.push('turn', 'user transcript complete', `chars=${text.length} lang=${language}`);
         this.emit({ type: 'user_transcript', turnId: itemId, text, final: true, language });
         this.emit({
           type: 'turn_completed',
@@ -490,13 +609,20 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
         break;
       }
       case 'conversation.item.input_audio_transcription.failed': {
+        // The model still heard the audio — only the text copy failed — so the
+        // conversation continues. But the transcript view, the safety screen
+        // and the summary all lose this turn, which is worth seeing in dev.
         diagnostics.push('error', 'input transcription failed');
+        diagnostics.setStatus({ userTranscriptAvailable: false, lastUserTranscriptChars: 0 });
         break;
       }
 
       /* ── Noor's turn ── */
       case 'response.created': {
         this.activeTurnId = newId();
+        // Proof that this reply is the realtime model's, generated now, for
+        // this turn — the counter rises once per reply and nowhere else.
+        diagnostics.bumpStatus('responseCreatedByRealtimeModel');
         diagnostics.push('turn', 'response created');
         if (this.state !== 'speaking') this.setState('thinking');
         break;
@@ -671,19 +797,33 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
     this.setState(this.options?.mode === 'audio' && !this.micMuted ? 'listening' : 'ready');
   }
 
-  /** Typed message — same session, same Noor, same safety rules. */
+  /**
+   * Typed message — same session, same Noor, same safety rules.
+   *
+   * The member's words become a conversation item first, and a reply is only
+   * requested once the server has acknowledged that item. An empty message is
+   * never sent, and nothing is ever substituted for one: a `response.create`
+   * with no user turn behind it produces a reply to nothing, which is exactly
+   * how a conversation starts sounding pre-written.
+   */
   sendText(text: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
     if (this.state === 'speaking') this.performBargeIn();
+
+    const itemId = `item_${newId()}`;
+    diagnostics.setStatus({ currentUserTurnReceived: false, conversationItemCreated: false });
     this.sendEvent({
       type: 'conversation.item.create',
       item: {
+        id: itemId,
         type: 'message',
         role: 'user',
         content: [{ type: 'input_text', text: trimmed }],
       },
     });
+    this.awaitItemThenRespond(itemId);
+
     const turnId = newId();
     const language = detectLanguage(trimmed);
     this.emit({ type: 'user_transcript', turnId, text: trimmed, final: true, language });
@@ -691,8 +831,41 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
       type: 'turn_completed',
       turn: { id: turnId, role: 'user', text: trimmed, language, final: true, startedAt: Date.now() },
     });
-    this.sendEvent({ type: 'response.create' });
     this.setState('thinking');
+  }
+
+  /**
+   * Ask for a reply once the member's turn is really in the conversation.
+   *
+   * The data channel is ordered and reliable, so the server processes the item
+   * before the response request in the normal case. The acknowledgement is
+   * what makes that a guarantee rather than an assumption — and it is the
+   * thing to look at when a reply arrives that ignores what was just said.
+   *
+   * If the acknowledgement never comes, the reply is requested anyway after a
+   * short wait: a member who has typed something deserves an answer more than
+   * they deserve a strictly ordered event log.
+   */
+  private awaitItemThenRespond(itemId: string): void {
+    const timer = window.setTimeout(() => {
+      if (!this.pendingItems.delete(itemId)) return;
+      diagnostics.push('turn', 'item ack timed out — requesting reply anyway', `item=${itemId}`);
+      this.requestReply();
+    }, ITEM_ACK_TIMEOUT_MS);
+    this.pendingItems.set(itemId, { timer });
+  }
+
+  private resolvePendingItem(itemId: string): void {
+    const pending = this.pendingItems.get(itemId);
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    this.pendingItems.delete(itemId);
+    diagnostics.push('turn', 'user item acknowledged', `item=${itemId}`);
+    this.requestReply();
+  }
+
+  private requestReply(): void {
+    this.sendEvent({ type: 'response.create' });
   }
 
   /**
@@ -718,7 +891,7 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
       type: 'session.update',
       session: {
         type: 'realtime',
-        instructions: `${this.options.instructions}\n\n# Current application state\n${extra}`,
+        instructions: `${this.currentInstructions()}\n\n# Current application state\n${extra}`,
       },
     });
   }
@@ -734,6 +907,7 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
   private handleDropout(): void {
     if (this.closed || this.reconnectTimer !== null) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      diagnostics.setStatus({ realtimeConnected: false });
       this.emit({ type: 'connection', state: 'failed', detail: 'reconnect_exhausted' });
       this.setState('error');
       return;
@@ -751,6 +925,10 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
   private async reconnect(): Promise<void> {
     if (this.closed || !this.options) return;
     this.teardownPeer();
+    // Marks the new session as a continuation: onChannelOpen re-seeds the
+    // turns already spoken and suppresses the opening greeting.
+    this.resumed = true;
+    diagnostics.setStatus({ realtimeConnected: false });
     try {
       const minted = await this.mintSession(this.options);
       this.voice = minted.voice;
@@ -847,6 +1025,9 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
   }
 
   private teardownPeer(): void {
+    for (const pending of this.pendingItems.values()) window.clearTimeout(pending.timer);
+    this.pendingItems.clear();
+    diagnostics.setStatus({ realtimeConnected: false });
     if (this.channel) {
       try {
         this.channel.close();

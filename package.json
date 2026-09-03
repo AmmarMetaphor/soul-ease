@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "validate": "npm run typecheck && npm run lint && npm run test && vite build"
+    "check:no-scripted-replies": "node scripts/check-no-scripted-replies.mjs dist",
+    "validate": "npm run typecheck && npm run lint && npm run test && vite build && npm run check:no-scripted-replies"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.50.0",

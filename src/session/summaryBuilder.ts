@@ -1,8 +1,8 @@
 import type { ConcernId, NewSessionSummary } from '@/data/types';
-import { detectTopic } from '@/realtime/demo/noorDemoScript';
 import type { TranscriptTurn } from '@/realtime/types';
 import type { SafetyState } from '@/safety/types';
 import { EXERCISES, suggestExercise } from '@/toolkit/exercises';
+import { detectTopic } from './topicTags';
 
 export interface SummaryMaterial {
   sessionId: string;

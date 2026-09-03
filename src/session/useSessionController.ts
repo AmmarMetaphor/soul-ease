@@ -7,7 +7,7 @@ import { RepositoryError } from '@/data/repository';
 import { evaluateEntitlement } from '@/entitlements/entitlement';
 import { canPersistTranscript, canPersistSessionSummary } from '@/memory/permissions';
 import { buildNoorRealtimeInstructions } from '@/noor/realtimeInstructions';
-import { createFallbackProvider, createRealtimeProvider, fallbackAllowed } from '@/realtime/createProvider';
+import { createRealtimeProvider } from '@/realtime/createProvider';
 import { diagnostics } from '@/realtime/diagnostics';
 import {
   RealtimeError,
@@ -57,8 +57,12 @@ export interface SessionControllerState {
   levelSource: 'user' | 'noor';
   elapsedSeconds: number;
   error: string | null;
-  /** 'demo' when the demo guide is running, 'fallback' when it replaced realtime. */
-  notice: 'demo' | 'fallback' | null;
+  /**
+   * 'demo' when this build explicitly runs the scripted UI harness instead of
+   * the realtime model. There is no longer a silent-substitution notice: a
+   * realtime connection that cannot be made is a failure, not a downgrade.
+   */
+  notice: 'demo' | null;
   providerKind: RealtimeConversationProvider['kind'] | null;
   capabilities: RealtimeConversationProvider['capabilities'] | null;
   entitlementBlocked: boolean;
@@ -315,43 +319,28 @@ export function useSessionController(initialMode: InteractionMode) {
         greetFirst: true,
       };
 
-      let provider = createRealtimeProvider({ getAccessToken });
-      let notice: SessionControllerState['notice'] = provider.kind === 'demo' ? 'demo' : null;
-      let unsubscribe = provider.subscribe(handleEvent);
+      const provider = await createRealtimeProvider({ getAccessToken });
+      const notice: SessionControllerState['notice'] = provider.kind === 'demo' ? 'demo' : null;
+      const unsubscribe = provider.subscribe(handleEvent);
       try {
         await provider.connect(connectOptions);
       } catch (err) {
         unsubscribe();
         void provider.disconnect().catch(() => undefined);
-        const notConfigured =
-          err instanceof RealtimeError && (err.code === 'not_configured' || err.code === 'not_implemented');
-        if (!notConfigured || !fallbackAllowed()) {
-          const micDenied = err instanceof RealtimeError && err.code === 'microphone_denied';
-          patch({
-            phase: 'failed',
-            // A stable code, so the UI can say what actually went wrong
-            // rather than reusing one message for every failure.
-            error: err instanceof RealtimeError ? err.code : 'connect_failed',
-            // Only narrow the mic state when we actually learned something.
-            ...(micDenied ? { micPermission: 'denied' as const } : {}),
-          });
-          return;
-        }
-        // No realtime credentials on this deployment — run the demo guide and
-        // say so plainly rather than pretending this is the real voice.
-        provider = createFallbackProvider();
-        notice = 'fallback';
-        unsubscribe = provider.subscribe(handleEvent);
-        try {
-          await provider.connect(connectOptions);
-        } catch (fallbackError) {
-          unsubscribe();
-          patch({
-            phase: 'failed',
-            error: fallbackError instanceof RealtimeError ? fallbackError.code : 'connect_failed',
-          });
-          return;
-        }
+        const micDenied = err instanceof RealtimeError && err.code === 'microphone_denied';
+        // A failed connection ends the attempt and says why. It must never be
+        // answered by starting the scripted engine instead: a member would
+        // then be having a fabricated conversation, believing it was Noor
+        // listening to them. Whatever went wrong here, that is worse.
+        patch({
+          phase: 'failed',
+          // A stable code, so the UI can say what actually went wrong
+          // rather than reusing one message for every failure.
+          error: err instanceof RealtimeError ? err.code : 'connect_failed',
+          // Only narrow the mic state when we actually learned something.
+          ...(micDenied ? { micPermission: 'denied' as const } : {}),
+        });
+        return;
       }
 
       providerRef.current = provider;

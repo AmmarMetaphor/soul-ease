@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { detectLanguage } from './languageDetection';
-import { createDemoState, detectTopic, respond } from './noorDemoScript';
+import { detectTopic } from '@/session/topicTags';
+import { createDemoState, respond } from './noorDemoScript';
 
 describe('detectLanguage', () => {
   it('recognises Urdu script', () => {

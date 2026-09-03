@@ -111,20 +111,26 @@ function stubFetch() {
   });
 }
 
+const CONNECT_OPTIONS = {
+  mode: 'text' as const, // no microphone needed for the transport contract
+  preferredLanguage: 'en' as const,
+  memoryContext: [],
+  instructions: 'test instructions',
+  openGently: false,
+};
+
 async function connectProvider() {
   const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => 'member-jwt' });
   const events: RealtimeEvent[] = [];
   provider.subscribe((event) => events.push(event));
-  await provider.connect({
-    mode: 'text', // no microphone needed for the transport contract
-    preferredLanguage: 'en',
-    memoryContext: [],
-    instructions: 'test instructions',
-    openGently: false,
-    greetFirst: false,
-  });
+  await provider.connect({ ...CONNECT_OPTIONS, greetFirst: false });
   channel.open();
   return { provider, events };
+}
+
+/** The server's acknowledgement that an item is now in the conversation. */
+function ackItem(id: string, role: 'user' | 'assistant'): void {
+  channel.serverEvent({ type: 'conversation.item.created', item: { id, role } });
 }
 
 /** Put Noor mid-sentence: a response is generating and audio is playing. */
@@ -178,7 +184,7 @@ describe('connection', () => {
   it.each([
     [503, 'host configured but no API key'],
     [404, 'no server function deployed at all'],
-  ])('reports not_configured on %i (%s) so the caller can fall back', async (status) => {
+  ])('reports not_configured on %i (%s) so the member is told the voice is unavailable', async (status) => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status })));
     const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => null });
     await expect(
@@ -227,9 +233,9 @@ describe('connection', () => {
   });
 
   /**
-   * In demo mode there is no member identity to send, so the member cannot fix
-   * a 401 by signing in. It must read as "no realtime here" and fall back —
-   * not as a sign-in prompt to someone who is already "logged in".
+   * Without real auth there is no member identity to send, so the member
+   * cannot fix a 401 by signing in. It must read as "no realtime here" — not
+   * as a sign-in prompt to someone who is already "logged in".
    */
   it('treats a 401 as "no realtime here" when the deployment has no real auth', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'unauthorised' }), { status: 401 })));
@@ -240,7 +246,7 @@ describe('connection', () => {
     });
   });
 
-  it('falls back rather than throwing a parse error when a rewrite serves HTML', async () => {
+  it('reports not_configured rather than a parse error when a rewrite serves HTML', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -428,9 +434,12 @@ describe('turn transcripts', () => {
     provider.sendText('mera dimagh bohat overthink kar raha hai');
 
     const create = channel.lastOfType('conversation.item.create')!;
-    const item = create.item as { content: Array<{ type: string; text: string }>; role: string };
+    const item = create.item as { id: string; content: Array<{ type: string; text: string }>; role: string };
     expect(item.role).toBe('user');
     expect(item.content[0]).toEqual({ type: 'input_text', text: 'mera dimagh bohat overthink kar raha hai' });
+
+    // The reply is requested only once the turn is really in the conversation.
+    ackItem(item.id, 'user');
     expect(channel.sentTypes()).toContain('response.create');
 
     const turn = events
@@ -439,6 +448,162 @@ describe('turn transcripts', () => {
     expect(turn?.turn.role).toBe('user');
     // "overthink" inside an Urdu sentence is code-switching, not English.
     expect(turn?.turn.language).toBe('mixed');
+  });
+});
+
+/**
+ * Event ordering — the guard against a reply that answers nothing.
+ *
+ * A `response.create` sent before the member's turn is part of the
+ * conversation asks the model to speak with no new input to speak about. The
+ * answer it produces is generic by construction, which is indistinguishable
+ * from a canned reply and was one of the suspects for Noor sounding
+ * pre-written.
+ */
+describe('turn ordering', () => {
+  it('never asks for a reply before the member’s typed turn is committed', async () => {
+    const { provider } = await connectProvider();
+    provider.sendText('I have an important interview tomorrow');
+
+    // Nothing has been acknowledged yet: no reply may be requested.
+    expect(channel.sentTypes()).not.toContain('response.create');
+
+    const item = (channel.lastOfType('conversation.item.create')!.item as { id: string }).id;
+    ackItem(item, 'user');
+
+    const types = channel.sentTypes();
+    expect(types).toContain('response.create');
+    // …and in this order, so the model always has the turn before the request.
+    expect(types.indexOf('conversation.item.create')).toBeLessThan(types.indexOf('response.create'));
+  });
+
+  it('asks for a reply anyway if the acknowledgement never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => 'jwt' });
+      const connecting = provider.connect({ ...CONNECT_OPTIONS, greetFirst: false });
+      await vi.runOnlyPendingTimersAsync();
+      await connecting;
+      channel.open();
+
+      provider.sendText('are you there?');
+      expect(channel.sentTypes()).not.toContain('response.create');
+      // The member is owed an answer more than we are owed an ordered log.
+      vi.advanceTimersByTime(2_100);
+      expect(channel.sentTypes()).toContain('response.create');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends nothing at all for an empty message, and substitutes no placeholder', async () => {
+    const { provider } = await connectProvider();
+    provider.sendText('   ');
+    expect(channel.sentTypes()).not.toContain('conversation.item.create');
+    expect(channel.sentTypes()).not.toContain('response.create');
+  });
+
+  /**
+   * Each spoken turn is committed by the server and answered on its own. The
+   * session is never rebuilt between turns: a `session.update` per VAD cycle
+   * would discard the conversation and leave Noor answering every turn as if
+   * it were the first thing she had heard.
+   */
+  it('accumulates spoken turns in one session without resetting it', async () => {
+    const { events } = await connectProvider();
+    const updatesAfterOpen = channel.sentTypes().filter((t) => t === 'session.update').length;
+
+    const turns = [
+      "I've been really stressed about work.",
+      "It's mostly because of my manager.",
+      'He messages me after 10 PM almost every night.',
+      "And then I can't switch my brain off when I go to bed.",
+    ];
+    turns.forEach((text, i) => {
+      channel.serverEvent({ type: 'input_audio_buffer.speech_started' });
+      channel.serverEvent({ type: 'input_audio_buffer.speech_stopped' });
+      channel.serverEvent({ type: 'input_audio_buffer.committed', item_id: `item_u${i}` });
+      channel.serverEvent({
+        type: 'conversation.item.input_audio_transcription.completed',
+        item_id: `item_u${i}`,
+        transcript: text,
+      });
+      channel.serverEvent({ type: 'response.created' });
+      channel.serverEvent({ type: 'response.done', response: { status: 'completed' } });
+    });
+
+    // No extra session.update, and no client-side response.create: semantic
+    // VAD asks for the reply itself once the turn is committed.
+    expect(channel.sentTypes().filter((t) => t === 'session.update').length).toBe(updatesAfterOpen);
+    expect(channel.sentTypes()).not.toContain('response.create');
+
+    const userTurns = events
+      .filter((e): e is Extract<RealtimeEvent, { type: 'turn_completed' }> => e.type === 'turn_completed')
+      .filter((e) => e.turn.role === 'user')
+      .map((e) => e.turn.text);
+    expect(userTurns).toEqual(turns);
+  });
+});
+
+/**
+ * Reconnection — the within-session memory that used to be lost.
+ *
+ * A realtime session's history lives on the server and dies with it. Minting
+ * a replacement without re-seeding gave the member a Noor who had never heard
+ * of their sister, and who greeted them again mid-conversation.
+ */
+describe('reconnection', () => {
+  it('re-seeds what was already said and does not start the conversation over', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new OpenAIRealtimeProvider({ getAccessToken: async () => 'jwt' });
+      const connecting = provider.connect({ ...CONNECT_OPTIONS, greetFirst: true });
+      await vi.runOnlyPendingTimersAsync();
+      await connecting;
+      channel.open();
+      // A first session opens with a greeting request.
+      expect(channel.sentTypes()).toContain('response.create');
+
+      // The member tells Noor about their sister, and Noor answers.
+      channel.serverEvent({
+        type: 'conversation.item.input_audio_transcription.completed',
+        item_id: 'item_u1',
+        transcript: 'My sister has been going through a hard time.',
+      });
+      channel.serverEvent({ type: 'response.created' });
+      channel.serverEvent({ type: 'response.output_item.added', item: { id: 'item_n1' } });
+      channel.serverEvent({ type: 'response.output_audio_transcript.delta', delta: 'What has that been like for you?' });
+      channel.serverEvent({ type: 'output_audio_buffer.started' });
+      channel.serverEvent({ type: 'output_audio_buffer.stopped' });
+
+      // The connection drops and the provider rebuilds the session.
+      const before = channel;
+      before.readyState = 'closed';
+      (provider as unknown as { handleDropout(): void }).handleDropout();
+      await vi.advanceTimersByTimeAsync(1_200);
+      expect(channel).not.toBe(before);
+      channel.open();
+
+      // History is restored, in order, on the new session.
+      const seeded = channel.sent.filter((e) => e.type === 'conversation.item.create');
+      expect(seeded).toHaveLength(2);
+      const roles = seeded.map((e) => (e.item as { role: string }).role);
+      expect(roles).toEqual(['user', 'assistant']);
+      const first = seeded[0].item as { content: Array<{ text: string }> };
+      expect(first.content[0].text).toBe('My sister has been going through a hard time.');
+
+      // History goes in before anything else is asked of the model…
+      const types = channel.sentTypes();
+      expect(types.indexOf('session.update')).toBeLessThan(types.indexOf('conversation.item.create'));
+      // …and she does not greet a member she is already mid-conversation with.
+      expect(types).not.toContain('response.create');
+
+      const update = channel.lastOfType('session.update')!;
+      const session = update.session as { instructions: string };
+      expect(session.instructions).toContain('Do not greet the member');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

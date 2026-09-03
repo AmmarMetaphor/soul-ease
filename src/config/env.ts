@@ -43,9 +43,13 @@ export const env = {
    */
   routerMode: (import.meta.env.VITE_ROUTER_MODE?.trim() === 'hash' ? 'hash' : 'browser') as 'browser' | 'hash',
   /**
-   * 'auto' (default) tries live realtime voice and falls back to the demo
-   * guide only when the deployment has no realtime credentials.
-   * 'demo' pins the demo guide; 'openai' pins realtime with no fallback.
+   * Which engine holds the conversation.
+   *
+   * 'auto' (default) and 'openai' both run the realtime model, and a realtime
+   * connection that cannot be established is reported as unavailable — never
+   * answered by a stand-in. 'demo' is the only value that runs the scripted
+   * interface harness, and must only be set for interface review: it replies
+   * from fixed line pools in the browser's own voice.
    */
   realtimeProvider: ((): 'auto' | 'demo' | 'openai' => {
     const raw = import.meta.env.VITE_REALTIME_PROVIDER?.trim();

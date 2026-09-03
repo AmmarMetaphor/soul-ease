@@ -2,6 +2,7 @@ import { newId } from '@/lib/ids';
 import type { SafetyState } from '@/safety/types';
 import { createDemoState, openingLine, respond, type DemoEngineState } from './demo/noorDemoScript';
 import { detectLanguage } from './demo/languageDetection';
+import { diagnostics } from './diagnostics';
 import {
   RealtimeError,
   type ConversationState,
@@ -35,18 +36,21 @@ const LANG_TAG: Record<DetectedLanguage, string> = {
 };
 
 /**
- * DEMO_MODE realtime provider.
+ * Scripted demonstration harness for the session interface.
  *
- * Gives the session UI a realistic, continuous-conversation feel before any
- * realtime credentials exist:
+ * Exercises the real interface plumbing with no credentials configured:
  *  - real microphone permission flow and live input-level metering
  *  - in-browser speech recognition where the browser offers it (Chromium)
- *  - spoken replies via speechSynthesis where available, otherwise timed text
- *  - scripted Noor replies from noorDemoScript
- *  - tap-to-interrupt barge-in that cancels Noor mid-sentence
+ *  - pre-written replies read out by browser speechSynthesis, or revealed as
+ *    timed text where synthesis is unavailable
+ *  - tap-to-interrupt barge-in that cancels mid-sentence
  *
- * Everything degrades gracefully: no recognition → type instead; no synthesis
- * → text reveals at speaking pace; no mic → text mode.
+ * What it is NOT: Noor. The replies come from noorDemoScript's fixed line
+ * pools, and the voice is the browser's, which Phase 2 explicitly rules out
+ * as a production voice. It is reachable only through an explicit
+ * `VITE_REALTIME_PROVIDER=demo` build, and it announces itself in the session
+ * UI, because a member cannot consent to a fabricated conversation they were
+ * not told about.
  */
 export class DemoRealtimeProvider implements RealtimeConversationProvider {
   readonly kind = 'demo' as const;
@@ -84,8 +88,8 @@ export class DemoRealtimeProvider implements RealtimeConversationProvider {
       bargeIn: true,
       liveTranscription: recognition,
       note: recognition
-        ? 'Demo guide — in-browser speech recognition and synthesis. Live conversational AI arrives in Phase 2.'
-        : 'Demo guide — this browser has no in-browser speech recognition, so type to talk. Live voice arrives in Phase 2.',
+        ? 'Demonstration harness — pre-written replies, spoken by your browser. Not Noor, and not a conversation.'
+        : 'Demonstration harness — pre-written replies, and this browser cannot hear you, so type instead. Not Noor.',
     };
   }
 
@@ -97,6 +101,10 @@ export class DemoRealtimeProvider implements RealtimeConversationProvider {
   }
 
   private emit(event: RealtimeEvent): void {
+    if (event.type === 'turn_completed' && event.turn.text.trim()) {
+      diagnostics.bumpStatus('conversationTurnCount');
+      if (event.turn.role === 'user') diagnostics.bumpStatus('userTurnCount');
+    }
     for (const listener of this.listeners) listener(event);
   }
 
@@ -112,6 +120,10 @@ export class DemoRealtimeProvider implements RealtimeConversationProvider {
     this.options = options;
     this.disconnected = false;
     this.engine = createDemoState(options.preferredLanguage);
+    // Declared loudly in diagnostics: whatever is said from here on is a
+    // pre-written line, not a model reading the member's words.
+    diagnostics.resetStatus({ demoMode: true, engine: 'scripted_demo' });
+    diagnostics.push('connection', 'scripted demo harness started (not the realtime model)');
     this.setState('connecting');
     this.emit({ type: 'connection', state: 'connecting' });
     await delay(650);
