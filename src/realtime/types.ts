@@ -77,10 +77,14 @@ export interface RealtimeConnectOptions {
   /** Short, member-approved memory lines Noor may draw on. */
   memoryContext: string[];
   displayName?: string | null;
-  /** Full system instructions for the model (see noor/persona.ts). */
+  /** Full system instructions for the model (see noor/realtimeInstructions.ts). */
   instructions: string;
   /** Whether the conversation opens in a gentler register. */
   openGently: boolean;
+  /** Language hints for input transcription, e.g. ['en', 'ur']. */
+  transcriptionLanguages?: string[];
+  /** Whether Noor opens the conversation. Defaults to true. */
+  greetFirst?: boolean;
 }
 
 export interface ProviderCapabilities {
@@ -112,6 +116,12 @@ export interface RealtimeConversationProvider {
 
   /** Barge-in: cancel Noor's current speech and hand the floor to the user. */
   interrupt(): void;
+
+  /**
+   * Ask Noor to speak a specific turn next (the closing recap, or an
+   * audition line). Optional: the demo engine has no equivalent.
+   */
+  requestSpokenTurn?(instruction: string): void;
 
   /** Optional output-device routing (not supported in every browser). */
   setOutputDevice?(deviceId: string): Promise<void>;

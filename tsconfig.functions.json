@@ -15,5 +15,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["netlify/functions"]
+  "include": ["server", "netlify/functions", "functions"]
 }

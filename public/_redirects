@@ -1,0 +1,7 @@
+# Cloudflare Pages SPA fallback.
+#
+# /api/* is served by the Pages Functions in /functions and must not be
+# rewritten to index.html. Everything else falls through to the SPA so a
+# refresh on /app/journal still loads the router.
+/api/*  /api/:splat  200
+/*      /index.html  200

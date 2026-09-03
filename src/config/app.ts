@@ -52,4 +52,6 @@ export const ROUTES = {
   settings: '/app/settings',
   memory: '/app/settings/memory',
   deleteAccount: '/app/settings/delete-account',
+  /** Development only — guarded by env.devToolsEnabled. */
+  devVoiceAudition: '/app/dev/voice',
 } as const;

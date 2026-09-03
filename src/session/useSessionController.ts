@@ -6,8 +6,9 @@ import type { ConcernId, InteractionMode, WellbeingSession } from '@/data/types'
 import { RepositoryError } from '@/data/repository';
 import { evaluateEntitlement } from '@/entitlements/entitlement';
 import { canPersistTranscript, canPersistSessionSummary } from '@/memory/permissions';
-import { buildNoorInstructions } from '@/noor/persona';
-import { createFallbackProvider, createRealtimeProvider } from '@/realtime/createProvider';
+import { buildNoorRealtimeInstructions } from '@/noor/realtimeInstructions';
+import { createFallbackProvider, createRealtimeProvider, fallbackAllowed } from '@/realtime/createProvider';
+import { diagnostics } from '@/realtime/diagnostics';
 import {
   RealtimeError,
   type ConnectionState,
@@ -20,9 +21,25 @@ import {
 import { detectsHumanSupportRequest, screenTextForSafety } from '@/safety/detector';
 import { initialStateForNewSession, isCoachingAllowed, maxSafetyState, transitionSafetyState } from '@/safety/machine';
 import type { SafetyState, SafetyTrigger } from '@/safety/types';
+import { buildMemoryContext, transcriptionLanguages } from './memoryContext';
 import { buildSessionSummary, deriveTopics } from './summaryBuilder';
 
-export type SessionPhase = 'checking' | 'blocked' | 'starting' | 'live' | 'ending' | 'ended' | 'failed';
+/**
+ * Session phases.
+ *
+ * 'gate' is the "Ready to talk?" screen: nothing is captured and no
+ * credential is minted until the member asks for the conversation to start.
+ */
+export type SessionPhase =
+  | 'checking'
+  | 'gate'
+  | 'blocked'
+  | 'connecting'
+  | 'live'
+  | 'recapping'
+  | 'ending'
+  | 'ended'
+  | 'failed';
 
 export interface SessionControllerState {
   phase: SessionPhase;
@@ -37,22 +54,19 @@ export interface SessionControllerState {
   liveUserText: string;
   liveNoorText: string;
   level: number;
+  levelSource: 'user' | 'noor';
   elapsedSeconds: number;
   error: string | null;
+  /** 'demo' when the demo guide is running, 'fallback' when it replaced realtime. */
   notice: 'demo' | 'fallback' | null;
   providerKind: RealtimeConversationProvider['kind'] | null;
   capabilities: RealtimeConversationProvider['capabilities'] | null;
   entitlementBlocked: boolean;
   agreedActions: string[];
+  voice: string | null;
+  model: string | null;
 }
 
-/**
- * Orchestrates one live session: entitlement check → repo session row →
- * realtime provider → safety screening → transcript persistence (consent
- * permitting) → end-of-session summary.
- *
- * UI components only read state and call the returned actions.
- */
 export function useSessionController(initialMode: InteractionMode) {
   const { repo, profile, consent, entitlement, refresh } = useData();
   const { getAccessToken } = useAuth();
@@ -68,6 +82,7 @@ export function useSessionController(initialMode: InteractionMode) {
   const sessionRef = useRef<WellbeingSession | null>(null);
   const endingRef = useRef(false);
   const noorTextRef = useRef<Record<string, string>>({});
+  const instructionsRef = useRef<string>('');
 
   const [state, setState] = useState<SessionControllerState>({
     phase: 'checking',
@@ -82,6 +97,7 @@ export function useSessionController(initialMode: InteractionMode) {
     liveUserText: '',
     liveNoorText: '',
     level: 0,
+    levelSource: 'user',
     elapsedSeconds: 0,
     error: null,
     notice: null,
@@ -89,11 +105,25 @@ export function useSessionController(initialMode: InteractionMode) {
     capabilities: null,
     entitlementBlocked: false,
     agreedActions: [],
+    voice: null,
+    model: null,
   });
 
   const patch = useCallback((update: Partial<SessionControllerState>) => {
     setState((prev) => ({ ...prev, ...update }));
   }, []);
+
+  /* ─── Entitlement gate ──────────────────────────────────────────────── */
+
+  useEffect(() => {
+    if (!entitlement || !profile) return;
+    const decision = evaluateEntitlement(entitlement);
+    patch(
+      decision.canStartSession
+        ? { phase: 'gate', mode: profile.preferredMode, entitlementBlocked: false }
+        : { phase: 'blocked', entitlementBlocked: true },
+    );
+  }, [entitlement, profile, patch]);
 
   /* ─── Safety ────────────────────────────────────────────────────────── */
 
@@ -104,6 +134,7 @@ export function useSessionController(initialMode: InteractionMode) {
       safetyRef.current = transition.to;
       maxSafetyRef.current = maxSafetyState(maxSafetyRef.current, transition.to);
       patch({ safetyState: transition.to, maxSafety: maxSafetyRef.current });
+      // Tell the model to change register immediately, mid-session.
       providerRef.current?.updateSafetyState?.(transition.to);
       try {
         await repo.logSafetyEvent({
@@ -134,12 +165,34 @@ export function useSessionController(initialMode: InteractionMode) {
     [consent, repo],
   );
 
+  /**
+   * Screen a completed user turn. This runs on transcripts produced by the
+   * realtime model itself, so safety detection works during voice
+   * conversations exactly as it does for typed messages.
+   */
+  const screenUserTurn = useCallback(
+    (text: string) => {
+      if (detectsHumanSupportRequest(text)) {
+        void applySafetyTrigger({ type: 'user_requests_human' });
+        return;
+      }
+      const level = screenTextForSafety(text);
+      if (level !== 'none') void applySafetyTrigger({ type: 'conversation_signal', level });
+    },
+    [applySafetyTrigger],
+  );
+
   const handleEvent = useCallback(
     (event: RealtimeEvent) => {
       switch (event.type) {
         case 'connection':
           patch({ connection: event.state });
-          if (event.state === 'failed') patch({ error: event.detail ?? 'Connection failed.' });
+          if (event.state === 'reconnecting') {
+            patch({ error: null });
+          }
+          if (event.state === 'failed') {
+            patch({ phase: 'failed', error: 'connection_lost' });
+          }
           break;
         case 'state':
           patch({ conversation: event.state });
@@ -148,50 +201,24 @@ export function useSessionController(initialMode: InteractionMode) {
           patch({ micPermission: event.state });
           break;
         case 'audio_level':
-          patch({ level: event.level });
+          patch({ level: event.level, levelSource: event.source });
           break;
         case 'user_transcript':
-          if (event.final) {
-            patch({ liveUserText: '' });
-          } else {
-            patch({ liveUserText: event.text });
-          }
+          patch({ liveUserText: event.final ? '' : event.text });
           break;
         case 'assistant_text':
           noorTextRef.current[event.turnId] = event.text;
           patch({ liveNoorText: event.final ? '' : event.text });
           break;
         case 'assistant_speech_stopped':
-          if (event.cancelled) {
-            const partial = noorTextRef.current[event.turnId];
-            if (partial) {
-              const turn: TranscriptTurn = {
-                id: event.turnId,
-                role: 'noor',
-                text: `${partial}—`,
-                language: null,
-                final: true,
-                startedAt: Date.now(),
-              };
-              turnsRef.current = [...turnsRef.current, turn];
-              patch({ turns: turnsRef.current, liveNoorText: '' });
-              persistTurn(turn);
-            }
-          }
           delete noorTextRef.current[event.turnId];
+          patch({ liveNoorText: '' });
           break;
         case 'turn_completed': {
           turnsRef.current = [...turnsRef.current, event.turn];
-          patch({ turns: turnsRef.current, liveUserText: event.turn.role === 'user' ? '' : undefined });
+          patch({ turns: turnsRef.current, ...(event.turn.role === 'user' ? { liveUserText: '' } : {}) });
           persistTurn(event.turn);
-          if (event.turn.role === 'user') {
-            if (detectsHumanSupportRequest(event.turn.text)) {
-              void applySafetyTrigger({ type: 'user_requests_human' });
-            } else {
-              const level = screenTextForSafety(event.turn.text);
-              if (level !== 'none') void applySafetyTrigger({ type: 'conversation_signal', level });
-            }
-          }
+          if (event.turn.role === 'user') screenUserTurn(event.turn.text);
           break;
         }
         case 'session_insight': {
@@ -211,12 +238,12 @@ export function useSessionController(initialMode: InteractionMode) {
           break;
       }
     },
-    [applySafetyTrigger, patch, persistTurn],
+    [patch, persistTurn, screenUserTurn],
   );
 
-  /* ─── Start ─────────────────────────────────────────────────────────── */
+  /* ─── Connect ───────────────────────────────────────────────────────── */
 
-  const start = useCallback(
+  const connect = useCallback(
     async (mode: InteractionMode) => {
       if (!profile || !entitlement) return;
       const decision = evaluateEntitlement(entitlement);
@@ -224,7 +251,7 @@ export function useSessionController(initialMode: InteractionMode) {
         patch({ phase: 'blocked', entitlementBlocked: true, mode });
         return;
       }
-      patch({ phase: 'starting', mode, error: null });
+      patch({ phase: 'connecting', mode, error: null });
 
       let session: WellbeingSession;
       try {
@@ -235,42 +262,57 @@ export function useSessionController(initialMode: InteractionMode) {
           await refresh();
           return;
         }
-        patch({ phase: 'failed', error: err instanceof Error ? err.message : 'The session could not be started.' });
+        patch({ phase: 'failed', error: err instanceof Error ? err.message : 'session_start_failed' });
         return;
       }
       sessionRef.current = session;
       startedAtRef.current = Date.now();
 
-      // Long-term memory only enters the session if the member allowed it.
-      let memories: string[] = [];
-      let previousMax: SafetyState | null = null;
+      // Bounded context payload — never whole transcripts.
+      let memories: Awaited<ReturnType<typeof repo.listMemories>> = [];
+      let goals: Awaited<ReturnType<typeof repo.listGoals>> = [];
+      let lastEnded: WellbeingSession | null = null;
+      let lastSummary: Awaited<ReturnType<typeof repo.getSummary>> = null;
+      let endedCount = 0;
       try {
-        if (consent.longTermMemory) {
-          const items = await repo.listMemories();
-          memories = items.slice(0, 8).map((m) => m.content);
-        }
-        const previous = await repo.listSessions();
-        const last = previous.find((s) => s.id !== session.id && s.status === 'ended');
-        previousMax = last?.maxSafetyState ?? null;
+        if (consent.longTermMemory) memories = await repo.listMemories();
+        goals = await repo.listGoals();
+        const sessions = await repo.listSessions();
+        const ended = sessions.filter((s) => s.id !== session.id && s.status === 'ended');
+        endedCount = ended.length;
+        lastEnded = ended[0] ?? null;
+        if (lastEnded) lastSummary = await repo.getSummary(lastEnded.id);
       } catch {
-        /* non-fatal */
+        // Memory is a nice-to-have; the conversation must work without it.
+        diagnostics.push('connection', 'memory context unavailable');
       }
-      const initialSafety = initialStateForNewSession(previousMax);
+
+      const context = buildMemoryContext({
+        profile,
+        consent,
+        memories,
+        goals,
+        lastEndedSession: lastEnded,
+        lastSummary,
+        endedSessionCount: endedCount,
+      });
+
+      const initialSafety = initialStateForNewSession(lastEnded?.maxSafetyState ?? null);
       safetyRef.current = initialSafety;
       maxSafetyRef.current = initialSafety;
 
+      const instructions = buildNoorRealtimeInstructions(context);
+      instructionsRef.current = instructions;
+
       const connectOptions = {
         mode,
-        preferredLanguage: profile.preferredLanguage,
-        memoryContext: memories,
-        displayName: profile.displayName,
-        instructions: buildNoorInstructions({
-          displayName: profile.displayName,
-          preferredLanguage: profile.preferredLanguage,
-          memoryContext: memories,
-          openGently: initialSafety !== 'NORMAL',
-        }),
-        openGently: initialSafety !== 'NORMAL',
+        preferredLanguage: context.preferredLanguage,
+        memoryContext: context.memoryLines,
+        displayName: context.displayName,
+        instructions,
+        openGently: context.openGently,
+        transcriptionLanguages: transcriptionLanguages(context.preferredLanguage),
+        greetFirst: true,
       };
 
       let provider = createRealtimeProvider({ getAccessToken });
@@ -280,20 +322,38 @@ export function useSessionController(initialMode: InteractionMode) {
         await provider.connect(connectOptions);
       } catch (err) {
         unsubscribe();
-        const recoverable = err instanceof RealtimeError && (err.code === 'not_configured' || err.code === 'not_implemented');
-        if (!recoverable) {
-          patch({ phase: 'failed', error: err instanceof Error ? err.message : 'Could not connect.' });
+        void provider.disconnect().catch(() => undefined);
+        const notConfigured =
+          err instanceof RealtimeError && (err.code === 'not_configured' || err.code === 'not_implemented');
+        if (!notConfigured || !fallbackAllowed()) {
+          const micDenied = err instanceof RealtimeError && err.code === 'microphone_denied';
+          patch({
+            phase: 'failed',
+            error: err instanceof Error ? err.message : 'connect_failed',
+            // Only narrow the mic state when we actually learned something.
+            ...(micDenied ? { micPermission: 'denied' as const } : {}),
+          });
           return;
         }
+        // No realtime credentials on this deployment — run the demo guide and
+        // say so plainly rather than pretending this is the real voice.
         provider = createFallbackProvider();
         notice = 'fallback';
         unsubscribe = provider.subscribe(handleEvent);
-        await provider.connect(connectOptions);
+        try {
+          await provider.connect(connectOptions);
+        } catch (fallbackError) {
+          unsubscribe();
+          patch({ phase: 'failed', error: fallbackError instanceof Error ? fallbackError.message : 'connect_failed' });
+          return;
+        }
       }
+
       providerRef.current = provider;
       unsubscribeRef.current = unsubscribe;
       provider.updateSafetyState?.(initialSafety);
 
+      const voiceProvider = provider as RealtimeConversationProvider & { currentVoice?: string; currentModel?: string };
       patch({
         phase: 'live',
         session,
@@ -302,18 +362,21 @@ export function useSessionController(initialMode: InteractionMode) {
         capabilities: provider.capabilities,
         safetyState: initialSafety,
         maxSafety: initialSafety,
+        voice: voiceProvider.currentVoice ?? null,
+        model: voiceProvider.currentModel ?? null,
       });
 
-      if (mode === 'audio') {
+      // The demo provider opens its own microphone; the realtime provider
+      // already did so before creating the offer.
+      if (mode === 'audio' && provider.kind === 'demo') {
         try {
           await provider.startListening();
-        } catch (err) {
-          // Mic problems are surfaced via events; the member can type instead.
-          if (!(err instanceof RealtimeError)) patch({ error: 'Microphone could not be started.' });
+        } catch {
+          /* surfaced through events */
         }
       }
     },
-    [consent.longTermMemory, entitlement, getAccessToken, handleEvent, patch, profile, refresh, repo],
+    [consent, entitlement, getAccessToken, handleEvent, patch, profile, refresh, repo],
   );
 
   /* ─── Controls ──────────────────────────────────────────────────────── */
@@ -321,7 +384,8 @@ export function useSessionController(initialMode: InteractionMode) {
   const toggleMic = useCallback(async () => {
     const provider = providerRef.current;
     if (!provider) return;
-    if (state.micPermission === 'granted' && state.conversation === 'listening') {
+    const listening = state.conversation === 'listening' || state.conversation === 'speaking';
+    if (state.micPermission === 'granted' && listening) {
       provider.stopListening();
       return;
     }
@@ -348,8 +412,33 @@ export function useSessionController(initialMode: InteractionMode) {
     [patch],
   );
 
+  const setOutputDevice = useCallback((deviceId: string) => {
+    void providerRef.current?.setOutputDevice?.(deviceId).catch(() => undefined);
+  }, []);
+
   const reportNotInDanger = useCallback(() => applySafetyTrigger({ type: 'user_reports_not_in_danger' }), [applySafetyTrigger]);
   const requestHuman = useCallback(() => applySafetyTrigger({ type: 'user_requests_human' }), [applySafetyTrigger]);
+
+  /** Retry after a connection failure without losing the app. */
+  const retry = useCallback(async () => {
+    unsubscribeRef.current?.();
+    await providerRef.current?.disconnect().catch(() => undefined);
+    providerRef.current = null;
+    turnsRef.current = [];
+    patch({ phase: 'gate', turns: [], error: null, connection: 'disconnected', conversation: 'idle' });
+  }, [patch]);
+
+  /**
+   * Ask Noor to close the conversation with a short spoken recap. The member
+   * can also skip straight to the summary with `end()`.
+   */
+  const requestRecap = useCallback(() => {
+    const provider = providerRef.current;
+    patch({ phase: 'recapping' });
+    provider?.requestSpokenTurn?.(
+      'The member has chosen to finish. In no more than four short sentences: recap what you talked about today, name the one or two things they said they would try, and close warmly. Do not ask a new question.',
+    );
+  }, [patch]);
 
   /* ─── End ───────────────────────────────────────────────────────────── */
 
@@ -381,22 +470,23 @@ export function useSessionController(initialMode: InteractionMode) {
       sessionRef.current = ended;
 
       if (canPersistSessionSummary(consent)) {
-        const summary = buildSessionSummary({
-          sessionId: session.id,
-          turns,
-          agreedActions: agreedRef.current,
-          topic: engineTopic,
-          interventionSlug: insightsRef.current.exercise,
-          maxSafetyState: maxSafetyRef.current,
-          fallbackConcerns: profile?.primaryConcerns ?? [],
-        });
-        await repo.saveSummary(summary);
+        await repo.saveSummary(
+          buildSessionSummary({
+            sessionId: session.id,
+            turns,
+            agreedActions: agreedRef.current,
+            topic: engineTopic,
+            interventionSlug: insightsRef.current.exercise,
+            maxSafetyState: maxSafetyRef.current,
+            fallbackConcerns: profile?.primaryConcerns ?? [],
+          }),
+        );
       }
       await refresh();
       patch({ phase: 'ended', session: ended, conversation: 'ended' });
       return ended.id;
     } catch (err) {
-      patch({ phase: 'ended', error: err instanceof Error ? err.message : 'The session could not be saved.' });
+      patch({ phase: 'ended', error: err instanceof Error ? err.message : 'save_failed' });
       return session.id;
     }
   }, [consent, patch, profile?.primaryConcerns, refresh, repo]);
@@ -404,7 +494,7 @@ export function useSessionController(initialMode: InteractionMode) {
   /* ─── Timer & cleanup ───────────────────────────────────────────────── */
 
   useEffect(() => {
-    if (state.phase !== 'live') return;
+    if (state.phase !== 'live' && state.phase !== 'recapping') return;
     const interval = window.setInterval(() => {
       if (startedAtRef.current) {
         patch({ elapsedSeconds: Math.round((Date.now() - startedAtRef.current) / 1000) });
@@ -423,14 +513,17 @@ export function useSessionController(initialMode: InteractionMode) {
   return {
     state,
     coachingAllowed: isCoachingAllowed(state.safetyState),
-    start,
+    connect,
     end,
+    retry,
+    requestRecap,
     toggleMic,
     pause,
     resume,
     interrupt,
     sendText,
     switchMode,
+    setOutputDevice,
     reportNotInDanger,
     requestHuman,
   };

@@ -10,12 +10,21 @@ interface AudioSettingsSheetProps {
   onClose: () => void;
   capabilities: ProviderCapabilities | null;
   providerKind: string | null;
+  /** Applies the chosen output device, when the browser allows it. */
+  onSelectOutputDevice?: (deviceId: string) => void;
 }
 
-export function AudioSettingsSheet({ open, onClose, capabilities, providerKind }: AudioSettingsSheetProps) {
+export function AudioSettingsSheet({
+  open,
+  onClose,
+  capabilities,
+  providerKind,
+  onSelectOutputDevice,
+}: AudioSettingsSheetProps) {
   const t = useT();
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
-  const supportsOutputSelection = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+  const supportsOutputSelection =
+    typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype && !!onSelectOutputDevice;
 
   useEffect(() => {
     if (!open || !navigator.mediaDevices?.enumerateDevices) return;
@@ -45,7 +54,11 @@ export function AudioSettingsSheet({ open, onClose, capabilities, providerKind }
           </p>
         </div>
         {supportsOutputSelection ? (
-          <Select label={t('session.deviceLabel')} defaultValue="default">
+          <Select
+            label={t('session.deviceLabel')}
+            defaultValue="default"
+            onChange={(e) => onSelectOutputDevice?.(e.target.value)}
+          >
             <option value="default">System default</option>
             {outputs.map((d) => (
               <option key={d.deviceId} value={d.deviceId}>
