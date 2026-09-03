@@ -1,0 +1,50 @@
+/**
+ * Runtime environment configuration.
+ *
+ * Only VITE_-prefixed variables are ever bundled into the browser. Server-side
+ * secrets (OpenAI key, etc.) live exclusively in Netlify Functions — see
+ * netlify/functions/realtime-token.ts.
+ */
+
+function readBool(value: string | undefined, fallback = false): boolean {
+  if (value === undefined || value === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+function readInt(value: string | undefined, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim() ?? '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() ?? '';
+const forceDemo = readBool(import.meta.env.VITE_FORCE_DEMO_MODE);
+
+const supabaseConfigured = supabaseUrl.length > 0 && supabaseAnonKey.length > 0;
+
+export const env = {
+  supabaseUrl,
+  supabaseAnonKey,
+  supabaseConfigured,
+  /**
+   * DEMO_MODE is active when Supabase is not configured or when explicitly
+   * forced. In demo mode all data is stored locally in the browser and no
+   * network calls are made. It exists so the product can be reviewed before
+   * infrastructure credentials are connected — it is not a production mode.
+   */
+  isDemoMode: forceDemo || !supabaseConfigured,
+  freeSessionAllowance: readInt(import.meta.env.VITE_FREE_SESSION_ALLOWANCE, 3),
+  publicSiteUrl: import.meta.env.VITE_PUBLIC_SITE_URL?.trim() || undefined,
+  /** 'demo' (default) or 'openai' — the latter is a Phase 2 scaffold. */
+  realtimeProvider: (import.meta.env.VITE_REALTIME_PROVIDER?.trim() === 'openai' ? 'openai' : 'demo') as
+    | 'demo'
+    | 'openai',
+  isDev: import.meta.env.DEV,
+} as const;
+
+export function siteOrigin(): string {
+  if (env.publicSiteUrl) return env.publicSiteUrl.replace(/\/$/, '');
+  if (typeof window !== 'undefined') return window.location.origin;
+  return '';
+}
