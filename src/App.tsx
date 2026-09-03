@@ -1,10 +1,11 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProviderBoundary } from '@/auth/AuthContext';
 import { DevBanner } from '@/components/DevBanner';
 import { AppShell } from '@/components/layout/AppShell';
 import { AuthLayout } from '@/components/layout/AuthLayout';
 import { MarketingLayout } from '@/components/layout/MarketingLayout';
 import { ROUTES } from '@/config/app';
+import { env } from '@/config/env';
 import { I18nProvider } from '@/i18n';
 import { AssessmentPage } from '@/pages/assessment/AssessmentPage';
 import { ForgotPasswordPage } from '@/pages/auth/ForgotPasswordPage';
@@ -83,13 +84,14 @@ export function AppRoutes() {
 }
 
 export default function App() {
+  const Router = env.routerMode === 'hash' ? HashRouter : BrowserRouter;
   return (
     <I18nProvider>
       <AuthProviderBoundary>
-        <BrowserRouter>
+        <Router>
           <DevBanner />
           <AppRoutes />
-        </BrowserRouter>
+        </Router>
       </AuthProviderBoundary>
     </I18nProvider>
   );

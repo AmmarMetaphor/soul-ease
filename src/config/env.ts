@@ -36,6 +36,12 @@ export const env = {
   isDemoMode: forceDemo || !supabaseConfigured,
   freeSessionAllowance: readInt(import.meta.env.VITE_FREE_SESSION_ALLOWANCE, 3),
   publicSiteUrl: import.meta.env.VITE_PUBLIC_SITE_URL?.trim() || undefined,
+  /**
+   * 'browser' (default) uses clean URLs and relies on the host's SPA rewrite
+   * (netlify.toml). 'hash' works on any static host with no rewrite support
+   * — used for standalone preview builds.
+   */
+  routerMode: (import.meta.env.VITE_ROUTER_MODE?.trim() === 'hash' ? 'hash' : 'browser') as 'browser' | 'hash',
   /** 'demo' (default) or 'openai' — the latter is a Phase 2 scaffold. */
   realtimeProvider: (import.meta.env.VITE_REALTIME_PROVIDER?.trim() === 'openai' ? 'openai' : 'demo') as
     | 'demo'
