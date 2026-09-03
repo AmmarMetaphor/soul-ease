@@ -12,7 +12,7 @@ interface TranscriptPanelProps {
 }
 
 function dirFor(text: string): 'rtl' | 'ltr' {
-  return /[؀-ۿ]/.test(text) ? 'rtl' : 'ltr';
+  return /[؀-ۿݐ-ݿ]/.test(text) ? 'rtl' : 'ltr';
 }
 
 export function TranscriptPanel({ turns, liveUserText, liveNoorText, persisted, className }: TranscriptPanelProps) {

@@ -1,5 +1,7 @@
 import type { DetectedLanguage } from '../types';
 
+/** Arabic + Arabic Supplement blocks (covers Urdu letters). Escaped so the
+ *  source survives any charset mis-detection. */
 const URDU_SCRIPT = /[؀-ۿݐ-ݿ]/;
 
 /**
