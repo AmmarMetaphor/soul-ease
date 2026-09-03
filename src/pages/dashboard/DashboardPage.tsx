@@ -182,7 +182,11 @@ export function DashboardPage() {
               <p className="mt-0.5 text-xs text-ink-500">
                 {relativeDay(latest.startedAt, locale)} · {formatDuration(latest.durationSeconds)}
               </p>
-              {latestSummary && <p className="mt-2 line-clamp-2 text-sm text-ink-700">{latestSummary.whatWeTalkedAbout}</p>}
+              {latestSummary && (
+                <p dir="auto" className="mt-2 line-clamp-2 text-sm text-ink-700">
+                  {latestSummary.whatWeTalkedAbout}
+                </p>
+              )}
             </Link>
           )}
         </Card>
@@ -204,7 +208,7 @@ export function DashboardPage() {
               {activeGoals.map((g) => (
                 <li key={g.id} className="flex items-start gap-2 text-sm text-ink-900">
                   <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-700" />
-                  {g.title}
+                  <span dir="auto">{g.title}</span>
                 </li>
               ))}
             </ul>
@@ -213,8 +217,10 @@ export function DashboardPage() {
 
         {/* Suggested exercise */}
         <Card className="bg-gradient-to-br from-dusk-100/70 to-white">
-          <CardHeader eyebrow={t('dashboard.suggestedExercise')} title={suggested.title} />
-          <p className="text-sm leading-relaxed text-ink-700">{suggested.summary}</p>
+          <CardHeader eyebrow={t('dashboard.suggestedExercise')} title={<span lang="en" dir="ltr">{suggested.title}</span>} />
+          <p lang="en" dir="ltr" className="text-sm leading-relaxed text-ink-700">
+            {suggested.summary}
+          </p>
           <div className="mt-4 flex items-center justify-between">
             <span className="text-xs text-ink-500">{t('toolkit.minutes', { n: suggested.durationMinutes })}</span>
             <LinkButton to={ROUTES.toolkit} variant="soft" size="sm">

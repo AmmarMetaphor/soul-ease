@@ -21,12 +21,14 @@ export function MarketingLayout() {
             </LinkButton>
           ) : (
             <>
-              <LinkButton to={ROUTES.login} variant="ghost" size="sm">
+              <LinkButton to={ROUTES.login} variant="ghost" size="sm" className="whitespace-nowrap">
                 {t('common.signIn')}
               </LinkButton>
-              <LinkButton to={ROUTES.signup} variant="primary" size="sm">
-                {t('landing.cta')}
-              </LinkButton>
+              <span className="hidden sm:inline-flex">
+                <LinkButton to={ROUTES.signup} variant="primary" size="sm" className="whitespace-nowrap">
+                  {t('landing.cta')}
+                </LinkButton>
+              </span>
             </>
           )}
         </nav>

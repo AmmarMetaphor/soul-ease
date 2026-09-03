@@ -127,11 +127,15 @@ export function SessionDetailPage() {
         <div className="mt-8 space-y-4">
           <section className="card p-5">
             <h2 className="text-sm font-semibold text-emerald-800">{t('summary.talkedAbout')}</h2>
-            <p className="mt-2 leading-relaxed">{summary.whatWeTalkedAbout}</p>
+            <p dir="auto" className="mt-2 leading-relaxed">
+              {summary.whatWeTalkedAbout}
+            </p>
           </section>
           <section className="card p-5">
             <h2 className="text-sm font-semibold text-emerald-800">{t('summary.mostImportant')}</h2>
-            <p className="mt-2 leading-relaxed">{summary.mostImportant}</p>
+            <p dir="auto" className="mt-2 leading-relaxed">
+              {summary.mostImportant}
+            </p>
           </section>
           {summary.agreedActions.length > 0 && (
             <section className="card p-5">
@@ -163,7 +167,7 @@ export function SessionDetailPage() {
           <h2 className="font-semibold text-ink-900">{t('history.transcript')}</h2>
           {turns.length > 0 && (
             <Button variant="ghost" size="sm" onClick={() => setShowTranscript((v) => !v)}>
-              {showTranscript ? t('session.hideTranscript') : t('session.transcript')}
+              {showTranscript ? t('session.hideTranscript') : t('history.showTranscript')}
             </Button>
           )}
         </div>

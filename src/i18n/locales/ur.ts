@@ -323,6 +323,7 @@ export const ur: Translations = {
     renamePlaceholder: 'اس سیشن کو عنوان دیں',
     deleteConfirm: 'یہ سیشن، اس کا خلاصہ اور ٹرانسکرپٹ حذف کریں؟ یہ واپس نہیں ہو سکتا۔',
     transcript: 'ٹرانسکرپٹ',
+    showTranscript: 'ٹرانسکرپٹ دکھائیں',
     noTranscript: 'اس سیشن کی کوئی ٹرانسکرپٹ محفوظ نہیں کی گئی۔',
     agreedActions: 'طے شدہ اقدامات',
     topics: 'موضوعات',

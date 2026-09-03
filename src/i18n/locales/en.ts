@@ -320,6 +320,7 @@ export const en = {
     renamePlaceholder: 'Give this session a title',
     deleteConfirm: 'Delete this session, its summary and any transcript? This cannot be undone.',
     transcript: 'Transcript',
+    showTranscript: 'Show transcript',
     noTranscript: 'No transcript was stored for this session.',
     agreedActions: 'Agreed actions',
     topics: 'Topics',

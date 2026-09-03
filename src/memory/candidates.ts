@@ -78,7 +78,7 @@ export function generateMemoryCandidates(material: CandidateSourceMaterial): Mem
   }
 
   if (material.recommendedExerciseSlug) {
-    push('coping_preference', `Was offered the "${material.recommendedExerciseSlug.replace(/-/g, ' ')}" exercise`);
+    push('coping_preference', `The "${material.recommendedExerciseSlug.replace(/-/g, ' ')}" exercise was suggested as a possible fit`);
   }
 
   return out.slice(0, 6);

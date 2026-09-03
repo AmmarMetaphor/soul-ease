@@ -18,7 +18,7 @@ export function Logo({ to = ROUTES.home, className, compact = false }: { to?: st
   return (
     <Link to={to} className={cn('inline-flex items-center gap-2.5 text-ink-900', className)} aria-label="Soul Ease home">
       <LogoMark />
-      {!compact && <span className="font-display text-lg font-medium tracking-tight">Soul Ease</span>}
+      {!compact && <span className="whitespace-nowrap font-display text-lg font-medium tracking-tight">Soul Ease</span>}
     </Link>
   );
 }

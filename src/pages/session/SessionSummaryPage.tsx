@@ -222,7 +222,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <section className="card p-5">
       <h2 className="text-sm font-semibold text-emerald-800">{title}</h2>
-      <div className="mt-2 leading-relaxed text-ink-900">{children}</div>
+      <div dir="auto" className="mt-2 leading-relaxed text-ink-900">
+        {children}
+      </div>
     </section>
   );
 }

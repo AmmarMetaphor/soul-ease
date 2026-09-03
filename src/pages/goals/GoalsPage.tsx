@@ -164,8 +164,14 @@ function GoalRow({ goal, locale, muted, children }: { goal: Goal; locale: 'en' |
   return (
     <li className={cn('card flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between', muted && 'opacity-75')}>
       <div className="min-w-0">
-        <p className={cn('font-medium text-ink-900', muted && 'line-through decoration-ink-300')}>{goal.title}</p>
-        {goal.description && <p className="mt-0.5 text-sm text-ink-500">{goal.description}</p>}
+        <p dir="auto" className={cn('font-medium text-ink-900', muted && 'line-through decoration-ink-300')}>
+          {goal.title}
+        </p>
+        {goal.description && (
+          <p dir="auto" className="mt-0.5 text-sm text-ink-500">
+            {goal.description}
+          </p>
+        )}
         {goal.targetDate && <p className="mt-1 text-xs text-ink-500">{formatDate(goal.targetDate, locale)}</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">{children}</div>

@@ -74,7 +74,7 @@ export function ToolkitPage() {
           const isOpen = open === exercise.slug;
           const isSaved = savedSlugs.has(exercise.slug);
           return (
-            <li key={exercise.slug} className="card flex flex-col p-5 sm:p-6">
+            <li key={exercise.slug} lang="en" dir="ltr" className="card flex flex-col p-5 sm:p-6">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="eyebrow">{t('toolkit.minutes', { n: exercise.durationMinutes })}</p>

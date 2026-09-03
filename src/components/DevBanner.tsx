@@ -34,6 +34,8 @@ export function DevBanner() {
     <div
       role="status"
       aria-label="Development notices"
+      dir="ltr"
+      lang="en"
       className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1 bg-ink-900 px-4 py-1.5 text-center text-[11px] font-medium text-ivory-100"
     >
       {notices.map((n) => {
@@ -44,12 +46,14 @@ export function DevBanner() {
             {n.text}
           </>
         );
+        // The demo notice is secondary; keep the safety warning alone on small screens.
+        const visibility = n.id === 'demo' ? 'hidden sm:inline-flex' : 'inline-flex';
         return n.to ? (
-          <Link key={n.id} to={n.to} className="inline-flex items-center gap-1.5 underline-offset-2 hover:underline">
+          <Link key={n.id} to={n.to} className={`${visibility} items-center gap-1.5 underline-offset-2 hover:underline`}>
             {content}
           </Link>
         ) : (
-          <span key={n.id} className="inline-flex items-center gap-1.5">
+          <span key={n.id} className={`${visibility} items-center gap-1.5`}>
             {content}
           </span>
         );

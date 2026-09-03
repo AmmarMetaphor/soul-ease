@@ -181,11 +181,21 @@ export function getExercise(slug: string): Exercise | undefined {
   return EXERCISES.find((e) => e.slug === slug);
 }
 
+/**
+ * Pick the exercise that fits the member's concerns best: an exercise whose
+ * primary focus (first `helpfulFor` entry) matches wins over one that merely
+ * lists the concern, so grief gets the unsent letter rather than a
+ * behavioural-activation prompt.
+ */
 export function suggestExercise(concerns: ConcernId[], excludeSlugs: string[] = []): Exercise {
   const candidates = EXERCISES.filter((e) => !excludeSlugs.includes(e.slug));
   for (const concern of concerns) {
-    const match = candidates.find((e) => e.helpfulFor.includes(concern));
-    if (match) return match;
+    const primary = candidates.find((e) => e.helpfulFor[0] === concern);
+    if (primary) return primary;
+  }
+  for (const concern of concerns) {
+    const secondary = candidates.find((e) => e.helpfulFor.includes(concern));
+    if (secondary) return secondary;
   }
   return candidates[0] ?? EXERCISES[0];
 }
