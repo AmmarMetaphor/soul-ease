@@ -1,17 +1,29 @@
 import { useState } from 'react';
 import { GUIDE_DESIGNATION, GUIDE_NAME } from '@/config/app';
+import { env } from '@/config/env';
 import { cn } from '@/lib/cn';
+import { NoorPortraitArt } from './NoorPortraitArt';
 
 /**
  * Noor's portrait.
  *
- * Integration point for the original synthetic portrait described in
- * public/images/noor/README.md. Until that asset is added the component
- * renders an abstract identity mark in Noor's palette — never a stock
- * photograph of a real person standing in for a fictional AI guide.
+ * Renders original vector artwork of an adult South Asian woman
+ * (NoorPortraitArt) — a warm, non-clinical, illustrated identity, and the
+ * portrait members actually see. This replaced an abstract initial-in-a-circle
+ * mark.
+ *
+ * A designed raster portrait can take over: drop the two files into
+ * public/images/noor/ and set VITE_NOOR_PORTRAIT_ASSET=true. The flag exists
+ * so a missing asset is never *attempted* — an <img> pointing at nothing gets
+ * the SPA's index.html back with a 200, which fails as an image only after the
+ * request, giving every page a wasted round trip and a visible flash.
+ *
+ * Never a stock photograph of a real person standing in for a fictional AI
+ * guide. See public/images/noor/README.md for the asset brief.
  *
  * Noor is always labelled "Soul Ease AI Wellbeing Guide"; never "Dr", never
- * "therapist".
+ * "therapist". The portrait itself never animates: the audio indicator is the
+ * ring around it, because a moving mouth on a static face is fake lip sync.
  */
 
 const SIZES = {
@@ -31,12 +43,15 @@ interface NoorPortraitProps {
   className?: string;
   /** Soft ambient ring that breathes while Noor is present. */
   ambient?: boolean;
-  /** Level 0–1; nudges the ring, never the photograph itself. */
+  /** Level 0–1; nudges the ring, never the portrait itself — no fake lip sync. */
   level?: number;
 }
 
 export function NoorPortrait({ size = 'md', className, ambient = false, level = 0 }: NoorPortraitProps) {
-  const [assetMissing, setAssetMissing] = useState(false);
+  // A supplied asset can still fail to decode; fall back to the artwork
+  // rather than leaving Noor with no face.
+  const [assetFailed, setAssetFailed] = useState(false);
+  const useArtwork = !env.noorPortraitAsset || assetFailed;
   const ringScale = 1 + Math.min(1, Math.max(0, level)) * 0.1;
 
   return (
@@ -55,8 +70,8 @@ export function NoorPortrait({ size = 'md', className, ambient = false, level = 
           ambient && 'orb-breathe',
         )}
       >
-        {assetMissing ? (
-          <IdentityMark />
+        {useArtwork ? (
+          <NoorPortraitArt className="h-full w-full" />
         ) : (
           <img
             src={SRC}
@@ -67,42 +82,10 @@ export function NoorPortrait({ size = 'md', className, ambient = false, level = 
             loading="eager"
             decoding="async"
             className="h-full w-full object-cover object-center"
-            onError={() => setAssetMissing(true)}
+            onError={() => setAssetFailed(true)}
           />
         )}
       </span>
-    </span>
-  );
-}
-
-/**
- * Abstract stand-in: a soft dusk-to-emerald field with Noor's initial. Reads
- * as a considered identity rather than a broken image.
- */
-function IdentityMark() {
-  return (
-    <span
-      role="img"
-      aria-label={`${GUIDE_NAME}, ${GUIDE_DESIGNATION}`}
-      // Mid-tone gradient so the ivory glyph keeps its contrast at every size.
-      className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_38%_30%,#b9a7cf_0%,#7c6a98_45%,#2f5a49_100%)]"
-    >
-      {/* SVG rather than a percentage font-size: this scales with the box,
-          which a % font-size does not (it resolves against the parent's size). */}
-      <svg viewBox="0 0 100 100" className="h-full w-full" aria-hidden="true">
-        <text
-          x="50"
-          y="52"
-          textAnchor="middle"
-          dominantBaseline="central"
-          fontSize="54"
-          fill="#fbf9f4"
-          fillOpacity="0.95"
-          style={{ fontFamily: "'Noto Nastaliq Urdu', 'Noto Naskh Arabic', serif" }}
-        >
-          ن
-        </text>
-      </svg>
     </span>
   );
 }

@@ -11,7 +11,7 @@ import {
 } from './permissions';
 
 describe('memory & transcript permissions', () => {
-  const all = { core: true, transcriptStorage: true, longTermMemory: true, assessmentStorage: true };
+  const all = { core: true, transcriptStorage: true, longTermMemory: true, assessmentStorage: true, journalAiAccess: false };
 
   it('nothing is permitted without core consent', () => {
     const noCore = { ...all, core: false };
@@ -39,7 +39,7 @@ describe('memory & transcript permissions', () => {
   });
 
   it('defaults deny everything', () => {
-    expect(DEFAULT_CONSENT_STATE).toEqual({ core: false, transcriptStorage: false, longTermMemory: false, assessmentStorage: false });
+    expect(DEFAULT_CONSENT_STATE).toEqual({ core: false, transcriptStorage: false, longTermMemory: false, assessmentStorage: false, journalAiAccess: false });
   });
 });
 
@@ -89,6 +89,9 @@ describe('generateMemoryCandidates', () => {
       userTurns: [],
       recommendedExerciseSlug: null,
     });
-    expect(many.length).toBeLessThanOrEqual(6);
+    // Stage 3 raised the cap to 8 to make room for follow-up and
+    // communication-preference candidates. Still bounded: an unbounded list is
+    // a wall of checkboxes at the end of a hard conversation.
+    expect(many.length).toBeLessThanOrEqual(8);
   });
 });

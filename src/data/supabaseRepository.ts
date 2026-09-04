@@ -4,6 +4,12 @@ import { RepositoryError, type SoulEaseRepository } from './repository';
 import type {
   AssessmentRun,
   ConsentRecord,
+  CopingOutcome,
+  CopingPreference,
+  FollowUpItem,
+  FollowUpStatus,
+  NewCopingPreference,
+  NewFollowUpItem,
   EndSessionInput,
   Goal,
   GoalStatus,
@@ -173,6 +179,30 @@ interface EntitlementRow {
   updated_at: string;
 }
 
+interface FollowUpRow {
+  id: string;
+  user_id: string;
+  prompt: string;
+  status: FollowUpStatus;
+  source_session_id: string | null;
+  due_after: string | null;
+  raised_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CopingPreferenceRow {
+  id: string;
+  user_id: string;
+  tool_slug: string;
+  outcome: CopingOutcome;
+  note: string | null;
+  source_session_id: string | null;
+  suggested_at: string;
+  reported_at: string | null;
+  updated_at: string;
+}
+
 interface SupportRow {
   id: string;
   user_id: string;
@@ -324,6 +354,30 @@ const mapEntitlement = (r: EntitlementRow): UsageEntitlement => ({
   plan: r.plan,
   freeSessionAllowance: r.free_session_allowance,
   sessionsUsed: r.sessions_used,
+  updatedAt: r.updated_at,
+});
+
+const mapFollowUp = (r: FollowUpRow): FollowUpItem => ({
+  id: r.id,
+  userId: r.user_id,
+  prompt: r.prompt,
+  status: r.status,
+  sourceSessionId: r.source_session_id,
+  dueAfter: r.due_after,
+  raisedAt: r.raised_at,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+const mapCopingPreference = (r: CopingPreferenceRow): CopingPreference => ({
+  id: r.id,
+  userId: r.user_id,
+  toolSlug: r.tool_slug,
+  outcome: r.outcome,
+  note: r.note,
+  sourceSessionId: r.source_session_id,
+  suggestedAt: r.suggested_at,
+  reportedAt: r.reported_at,
   updatedAt: r.updated_at,
 });
 
@@ -722,6 +776,90 @@ export class SupabaseRepository implements SoulEaseRepository {
       .eq('user_id', this.userId)
       .eq('tool_slug', toolSlug);
     if (error) fail('Removing saved tool', error);
+  }
+
+  /* ─── Coping preferences ────────────────────────────────────────────── */
+
+  async listCopingPreferences(): Promise<CopingPreference[]> {
+    const { data, error } = await this.client
+      .from('coping_preferences')
+      .select('*')
+      .eq('user_id', this.userId)
+      .order('updated_at', { ascending: false });
+    if (error) fail('Loading coping preferences', error);
+    return (data as CopingPreferenceRow[]).map(mapCopingPreference);
+  }
+
+  /**
+   * One row per approach: a later report supersedes an earlier one, so a
+   * member who first found something unhelpful and later found it useful is
+   * recorded as they last told us, not as a contradictory pair.
+   */
+  async recordCopingPreference(input: NewCopingPreference): Promise<CopingPreference> {
+    const reported = input.outcome === 'suggested' ? null : new Date().toISOString();
+    const { data, error } = await this.client
+      .from('coping_preferences')
+      .upsert(
+        {
+          user_id: this.userId,
+          tool_slug: input.toolSlug,
+          outcome: input.outcome,
+          note: input.note ?? null,
+          source_session_id: input.sourceSessionId ?? null,
+          reported_at: reported,
+        },
+        { onConflict: 'user_id,tool_slug' },
+      )
+      .select('*')
+      .single();
+    if (error) fail('Saving coping preference', error);
+    return mapCopingPreference(data as CopingPreferenceRow);
+  }
+
+  async deleteCopingPreference(id: string): Promise<void> {
+    const { error } = await this.client.from('coping_preferences').delete().eq('id', id);
+    if (error) fail('Deleting coping preference', error);
+  }
+
+  /* ─── Follow-ups ────────────────────────────────────────────────────── */
+
+  async listFollowUps(status?: FollowUpStatus): Promise<FollowUpItem[]> {
+    let query = this.client.from('follow_up_items').select('*').eq('user_id', this.userId);
+    if (status) query = query.eq('status', status);
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) fail('Loading follow-ups', error);
+    return (data as FollowUpRow[]).map(mapFollowUp);
+  }
+
+  async createFollowUp(input: NewFollowUpItem): Promise<FollowUpItem> {
+    const { data, error } = await this.client
+      .from('follow_up_items')
+      .insert({
+        user_id: this.userId,
+        prompt: input.prompt,
+        source_session_id: input.sourceSessionId ?? null,
+        due_after: input.dueAfter ?? null,
+      })
+      .select('*')
+      .single();
+    if (error) fail('Saving follow-up', error);
+    return mapFollowUp(data as FollowUpRow);
+  }
+
+  async updateFollowUpStatus(id: string, status: FollowUpStatus): Promise<FollowUpItem> {
+    const { data, error } = await this.client
+      .from('follow_up_items')
+      .update({ status, raised_at: status === 'raised' ? new Date().toISOString() : undefined })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) fail('Updating follow-up', error);
+    return mapFollowUp(data as FollowUpRow);
+  }
+
+  async deleteFollowUp(id: string): Promise<void> {
+    const { error } = await this.client.from('follow_up_items').delete().eq('id', id);
+    if (error) fail('Deleting follow-up', error);
   }
 
   /* ─── Safety ────────────────────────────────────────────────────────── */

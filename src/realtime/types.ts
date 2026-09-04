@@ -29,6 +29,13 @@ export type DetectedLanguage = 'en' | 'ur' | 'ur-roman' | 'mixed';
 
 export type RealtimeErrorCode =
   | 'not_configured'
+  /**
+   * Realtime exists on this deployment but the upstream account cannot serve
+   * a session right now — rate-limited or out of quota (HTTP 429). Distinct
+   * from `not_configured`, which is a deployment problem, and from
+   * `connection_failed`, which would wrongly blame the member's network.
+   */
+  | 'service_unavailable'
   | 'not_implemented'
   | 'unsupported_browser'
   | 'microphone_denied'

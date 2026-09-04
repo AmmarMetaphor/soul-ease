@@ -5,7 +5,7 @@ import { useData } from '@/data/DataContext';
 import type { ConcernId, InteractionMode, WellbeingSession } from '@/data/types';
 import { RepositoryError } from '@/data/repository';
 import { evaluateEntitlement } from '@/entitlements/entitlement';
-import { canPersistTranscript, canPersistSessionSummary } from '@/memory/permissions';
+import { canPersistTranscript, canPersistSessionSummary, canShareJournalWithNoor } from '@/memory/permissions';
 import { buildNoorRealtimeInstructions } from '@/noor/realtimeInstructions';
 import { createRealtimeProvider } from '@/realtime/createProvider';
 import { diagnostics } from '@/realtime/diagnostics';
@@ -21,8 +21,9 @@ import {
 import { detectsHumanSupportRequest, screenTextForSafety } from '@/safety/detector';
 import { initialStateForNewSession, isCoachingAllowed, maxSafetyState, transitionSafetyState } from '@/safety/machine';
 import type { SafetyState, SafetyTrigger } from '@/safety/types';
-import { buildMemoryContext, transcriptionLanguages } from './memoryContext';
-import { buildSessionSummary, deriveTopics } from './summaryBuilder';
+import { buildMemoryContext, MEMORY_LIMITS, transcriptionLanguages } from './memoryContext';
+import { buildSessionOutcome } from './sessionOutcome';
+import { deriveTopics } from './summaryBuilder';
 
 /**
  * Session phases.
@@ -272,14 +273,28 @@ export function useSessionController(initialMode: InteractionMode) {
       sessionRef.current = session;
       startedAtRef.current = Date.now();
 
-      // Bounded context payload — never whole transcripts.
+      // Bounded context payload — never whole transcripts. Each source is
+      // fetched only when the member's consent actually permits it, so an
+      // unconsented store is not merely filtered out later: it is never read.
       let memories: Awaited<ReturnType<typeof repo.listMemories>> = [];
       let goals: Awaited<ReturnType<typeof repo.listGoals>> = [];
+      let followUps: Awaited<ReturnType<typeof repo.listFollowUps>> = [];
+      let copingPreferences: Awaited<ReturnType<typeof repo.listCopingPreferences>> = [];
+      let journalEntries: Awaited<ReturnType<typeof repo.listJournalEntries>> = [];
       let lastEnded: WellbeingSession | null = null;
       let lastSummary: Awaited<ReturnType<typeof repo.getSummary>> = null;
       let endedCount = 0;
       try {
-        if (consent.longTermMemory) memories = await repo.listMemories();
+        if (consent.longTermMemory) {
+          memories = await repo.listMemories();
+          followUps = await repo.listFollowUps('open');
+        }
+        // Rejected approaches are read regardless: "do not suggest this again"
+        // is an instruction about Noor's behaviour, not a stored personal fact.
+        copingPreferences = await repo.listCopingPreferences();
+        if (canShareJournalWithNoor(consent)) {
+          journalEntries = (await repo.listJournalEntries()).slice(0, MEMORY_LIMITS.journalLines);
+        }
         goals = await repo.listGoals();
         const sessions = await repo.listSessions();
         const ended = sessions.filter((s) => s.id !== session.id && s.status === 'ended');
@@ -296,6 +311,9 @@ export function useSessionController(initialMode: InteractionMode) {
         consent,
         memories,
         goals,
+        followUps,
+        copingPreferences,
+        journalEntries,
         lastEndedSession: lastEnded,
         lastSummary,
         endedSessionCount: endedCount,
@@ -463,18 +481,47 @@ export function useSessionController(initialMode: InteractionMode) {
       });
       sessionRef.current = ended;
 
+      // One structured outcome, so the summary text, the coping record and
+      // the follow-ups all describe the same conversation rather than being
+      // derived separately from the same turns and drifting apart.
+      const outcome = buildSessionOutcome({
+        sessionId: session.id,
+        turns,
+        agreedActions: agreedRef.current,
+        topic: engineTopic,
+        interventionSlug: insightsRef.current.exercise,
+        maxSafetyState: maxSafetyRef.current,
+        fallbackConcerns: profile?.primaryConcerns ?? [],
+        copingToolsDiscussed: insightsRef.current.exercise ? [insightsRef.current.exercise] : [],
+      });
+
       if (canPersistSessionSummary(consent)) {
-        await repo.saveSummary(
-          buildSessionSummary({
-            sessionId: session.id,
-            turns,
-            agreedActions: agreedRef.current,
-            topic: engineTopic,
-            interventionSlug: insightsRef.current.exercise,
-            maxSafetyState: maxSafetyRef.current,
-            fallbackConcerns: profile?.primaryConcerns ?? [],
-          }),
-        );
+        await repo.saveSummary(outcome.summary);
+      }
+
+      // Coping approaches are recorded as 'suggested' with no outcome claimed.
+      // The member says whether something helped; we never infer it from the
+      // fact that it was mentioned.
+      for (const slug of outcome.copingToolsDiscussed) {
+        try {
+          if (!(await repo.listCopingPreferences()).some((p) => p.toolSlug === slug)) {
+            await repo.recordCopingPreference({ toolSlug: slug, outcome: 'suggested', sourceSessionId: session.id });
+          }
+        } catch {
+          // A missed coping record must not cost the member their summary.
+        }
+      }
+
+      // Follow-ups persist only with memory consent — they are a thing Noor
+      // will bring up in a future conversation, which is memory by any name.
+      if (consent.longTermMemory) {
+        for (const prompt of outcome.followUpTopics) {
+          try {
+            await repo.createFollowUp({ prompt, sourceSessionId: session.id });
+          } catch {
+            // As above: never block the summary on this.
+          }
+        }
       }
       await refresh();
       patch({ phase: 'ended', session: ended, conversation: 'ended' });

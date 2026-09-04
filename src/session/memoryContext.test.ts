@@ -7,7 +7,7 @@ const CONSENT_ALL: ConsentState = {
   core: true,
   transcriptStorage: true,
   longTermMemory: true,
-  assessmentStorage: true,
+  assessmentStorage: true, journalAiAccess: false,
 };
 
 function profile(overrides: Partial<Profile> = {}): Profile {
@@ -90,6 +90,9 @@ function sources(overrides: Partial<MemorySources> = {}): MemorySources {
     consent: CONSENT_ALL,
     memories: [],
     goals: [],
+    followUps: [],
+    copingPreferences: [],
+    journalEntries: [],
     lastEndedSession: null,
     lastSummary: null,
     endedSessionCount: 0,

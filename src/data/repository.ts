@@ -2,7 +2,10 @@ import type { ConsentType } from '@/memory/permissions';
 import type {
   AssessmentRun,
   ConsentRecord,
+  CopingPreference,
   EndSessionInput,
+  FollowUpItem,
+  FollowUpStatus,
   Goal,
   GoalStatus,
   HumanSupportRequest,
@@ -11,6 +14,8 @@ import type {
   MemoryItem,
   MoodCheckin,
   NewAssessmentRun,
+  NewCopingPreference,
+  NewFollowUpItem,
   NewGoal,
   NewHumanSupportRequest,
   NewJournalEntry,
@@ -88,6 +93,22 @@ export interface SoulEaseRepository {
   listSavedTools(): Promise<SavedCopingTool[]>;
   saveTool(toolSlug: string): Promise<SavedCopingTool>;
   unsaveTool(toolSlug: string): Promise<void>;
+
+  /**
+   * Coping preferences — what has and has not helped.
+   *
+   * Read at session start so Noor never re-suggests something the member
+   * already said did not work for them.
+   */
+  listCopingPreferences(): Promise<CopingPreference[]>;
+  recordCopingPreference(input: NewCopingPreference): Promise<CopingPreference>;
+  deleteCopingPreference(id: string): Promise<void>;
+
+  /* Follow-ups the member asked Noor to remember */
+  listFollowUps(status?: FollowUpStatus): Promise<FollowUpItem[]>;
+  createFollowUp(input: NewFollowUpItem): Promise<FollowUpItem>;
+  updateFollowUpStatus(id: string, status: FollowUpStatus): Promise<FollowUpItem>;
+  deleteFollowUp(id: string): Promise<void>;
 
   /* Safety */
   logSafetyEvent(input: NewSafetyEvent): Promise<SafetyEvent>;

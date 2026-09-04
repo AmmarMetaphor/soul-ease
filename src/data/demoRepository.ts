@@ -5,6 +5,11 @@ import { RepositoryError, type SoulEaseRepository } from './repository';
 import type {
   AssessmentRun,
   ConsentRecord,
+  CopingPreference,
+  FollowUpItem,
+  FollowUpStatus,
+  NewCopingPreference,
+  NewFollowUpItem,
   EndSessionInput,
   Goal,
   GoalStatus,
@@ -43,6 +48,8 @@ type Collection =
   | 'journal'
   | 'moods'
   | 'tools'
+  | 'copingPreferences'
+  | 'followUps'
   | 'safety'
   | 'entitlement'
   | 'support';
@@ -408,6 +415,80 @@ export class DemoRepository implements SoulEaseRepository {
 
   async unsaveTool(toolSlug: string): Promise<void> {
     this.write('tools', this.read<SavedCopingTool>('tools').filter((t) => t.toolSlug !== toolSlug));
+  }
+
+  /* ─── Coping preferences ────────────────────────────────────────────── */
+
+  async listCopingPreferences(): Promise<CopingPreference[]> {
+    return this.read<CopingPreference>('copingPreferences');
+  }
+
+  /** One row per approach: a later report replaces an earlier one. */
+  async recordCopingPreference(input: NewCopingPreference): Promise<CopingPreference> {
+    const rows = this.read<CopingPreference>('copingPreferences');
+    const existing = rows.find((r) => r.toolSlug === input.toolSlug);
+    const now = nowIso();
+    const row: CopingPreference = {
+      id: existing?.id ?? newId(),
+      userId: this.userId,
+      toolSlug: input.toolSlug,
+      outcome: input.outcome,
+      note: input.note ?? null,
+      sourceSessionId: input.sourceSessionId ?? null,
+      suggestedAt: existing?.suggestedAt ?? now,
+      reportedAt: input.outcome === 'suggested' ? null : now,
+      updatedAt: now,
+    };
+    this.write('copingPreferences', [...rows.filter((r) => r.toolSlug !== input.toolSlug), row]);
+    return row;
+  }
+
+  async deleteCopingPreference(id: string): Promise<void> {
+    this.write('copingPreferences', this.read<CopingPreference>('copingPreferences').filter((r) => r.id !== id));
+  }
+
+  /* ─── Follow-ups ────────────────────────────────────────────────────── */
+
+  async listFollowUps(status?: FollowUpStatus): Promise<FollowUpItem[]> {
+    const rows = this.read<FollowUpItem>('followUps');
+    return (status ? rows.filter((r) => r.status === status) : rows).sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
+  }
+
+  async createFollowUp(input: NewFollowUpItem): Promise<FollowUpItem> {
+    const now = nowIso();
+    const row: FollowUpItem = {
+      id: newId(),
+      userId: this.userId,
+      prompt: input.prompt,
+      status: 'open',
+      sourceSessionId: input.sourceSessionId ?? null,
+      dueAfter: input.dueAfter ?? null,
+      raisedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.write('followUps', [...this.read<FollowUpItem>('followUps'), row]);
+    return row;
+  }
+
+  async updateFollowUpStatus(id: string, status: FollowUpStatus): Promise<FollowUpItem> {
+    const rows = this.read<FollowUpItem>('followUps');
+    const found = rows.find((r) => r.id === id);
+    if (!found) throw new RepositoryError('Follow-up not found');
+    const updated: FollowUpItem = {
+      ...found,
+      status,
+      raisedAt: status === 'raised' ? nowIso() : found.raisedAt,
+      updatedAt: nowIso(),
+    };
+    this.write('followUps', rows.map((r) => (r.id === id ? updated : r)));
+    return updated;
+  }
+
+  async deleteFollowUp(id: string): Promise<void> {
+    this.write('followUps', this.read<FollowUpItem>('followUps').filter((r) => r.id !== id));
   }
 
   /* ─── Safety ────────────────────────────────────────────────────────── */

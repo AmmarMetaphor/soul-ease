@@ -14,13 +14,21 @@ export type ConsentType =
   | 'core_terms_and_ai_disclosure'
   | 'transcript_storage'
   | 'long_term_memory'
-  | 'assessment_storage';
+  | 'assessment_storage'
+  /**
+   * Whether Noor may read recent journal entries. Separate from every other
+   * consent and off by default: a journal is where people write the things
+   * they are not ready to say out loud, and it should stay theirs until they
+   * decide otherwise.
+   */
+  | 'journal_ai_access';
 
 export interface ConsentState {
   core: boolean;
   transcriptStorage: boolean;
   longTermMemory: boolean;
   assessmentStorage: boolean;
+  journalAiAccess: boolean;
 }
 
 export const DEFAULT_CONSENT_STATE: ConsentState = {
@@ -28,6 +36,7 @@ export const DEFAULT_CONSENT_STATE: ConsentState = {
   transcriptStorage: false,
   longTermMemory: false,
   assessmentStorage: false,
+  journalAiAccess: false,
 };
 
 export function canProceedToSessions(consent: ConsentState): boolean {
@@ -42,6 +51,17 @@ export function canPersistTranscript(consent: ConsentState): boolean {
 /** Whether proposed memory items may be saved for future sessions. */
 export function canPersistLongTermMemory(consent: ConsentState): boolean {
   return consent.core && consent.longTermMemory;
+}
+
+/**
+ * Whether Noor may be shown recent journal entries.
+ *
+ * Conservative by design: it requires its own explicit opt-in, and is not
+ * implied by consenting to transcripts or to long-term memory. Writing
+ * something down is not the same as saying it.
+ */
+export function canShareJournalWithNoor(consent: ConsentState): boolean {
+  return consent.core && consent.journalAiAccess;
 }
 
 /** Whether screening scores may be stored against the account. */
@@ -75,6 +95,9 @@ export function consentStateFromRecords(
         break;
       case 'assessment_storage':
         state.assessmentStorage = record.granted;
+        break;
+      case 'journal_ai_access':
+        state.journalAiAccess = record.granted;
         break;
     }
   }

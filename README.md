@@ -31,6 +31,7 @@ member can interrupt her mid-sentence. See
 - [Realtime voice architecture](#realtime-voice-architecture)
 - [Environment variables](#environment-variables)
 - [Verifying the conversation](#verifying-the-conversation)
+- [Live realtime acceptance (pending)](docs/LIVE_REALTIME_ACCEPTANCE.md)
 - [Supabase setup](#supabase-setup)
 - [Cloudflare deployment](#cloudflare-deployment)
 - [Netlify deployment](#netlify-deployment)
@@ -211,6 +212,111 @@ them, and never re-sends `session.update` between turns.
 An empty message sends nothing at all, and no placeholder is ever substituted
 for a turn that was not understood.
 
+### Noor's behavioural specification
+
+Noor is built from instructions, context and evaluation — **not** fine-tuning.
+The specification lives in `src/noor/spec/`, one module per behaviour, composed
+by `spec/index.ts`:
+
+| Module | What it governs |
+| --- | --- |
+| `identity.ts` | Who she is, and that she is an adult female AI with no invented biography |
+| `scope.ts` | What she takes on; human support |
+| `contextualResponseRules.ts` | Answering the person not the topic; corrections; turn-taking |
+| `conversationalStyle.ts` | Short turns, one question, no stock openers |
+| `languageBehaviour.ts` | English / Urdu / mixed, and transcription language hints |
+| `therapeuticMethods.ts` | Approaches, the internal progression, goals and follow-ups |
+| `memoryRules.ts` | What she may claim to know |
+| `safetyRules.ts` | Safety, and that it outranks personalisation |
+| `prohibited.ts` | The never-say list |
+| `examples.ts` | Worked contrasts — member turn plus what to engage with |
+| `context.ts` | The typed bounded context package |
+
+Section order is deliberate: `# Answering what they actually said` comes before
+any style or method rule, and `# Safety` appears after `# Memory` and states
+explicitly that it overrides it. A test asserts the order.
+
+**One Noor.** Voice and text compose the same specification — nothing branches
+on interaction mode, and a test pins that.
+
+The internal progression (LISTENING → UNDERSTANDING → CLARIFYING → REFLECTING
+→ OPTIONAL INTERVENTION → ACTION) is never announced, never shown as a stage,
+and may legitimately stop at LISTENING for a whole conversation.
+
+### Memory architecture
+
+Three layers, documented in `src/memory/layers.ts` because they have different
+lifetimes and different consent requirements:
+
+1. **Active session memory** — inside the realtime session plus the provider's
+   bounded turn buffer for reconnection. Dies with the session.
+2. **Session summary** — `session_summaries`, one structured row per session
+   (`src/session/sessionOutcome.ts`). Needs transcript **or** memory consent.
+3. **Approved long-term memory** — `memory_items`, `follow_up_items`, `goals`,
+   `coping_preferences`. Needs memory consent *and* per-item approval.
+
+Nothing promotes itself. A session proposes candidates
+(`src/memory/candidates.ts`), the member approves or discards them on the
+summary screen, and only survivors persist.
+
+A new session starts from a **bounded context package**
+(`src/session/memoryContext.ts`) — name, last-session gist, active goals, due
+follow-ups, approved memory lines, coping history, and journal lines only if
+journal access was granted. Whole transcripts are never replayed: a long
+history buries the current turn and hands the model far more of someone's life
+than the conversation needs. Excluded on purpose: transcripts, assessment
+scores, safety history, mood notes.
+
+**Deletion is real.** Removing an item removes the row the context package is
+built from, so it stops reaching Noor on the very next session. There is no
+second cache to purge, and a provider contract test pins that.
+
+**Journal privacy** is its own consent (`journal_ai_access`), off by default
+and not implied by transcript or memory consent. Writing something down is not
+the same as saying it.
+
+**Rejected coping approaches** (`src/memory/copingPreferences.ts`) are a
+deny-list, and are read even when long-term memory is off — "do not suggest
+this again" is an instruction about Noor's behaviour, not a stored personal
+fact. Re-offering something a member already dismissed is the loudest way to
+tell them nobody listened.
+
+### Noor's portrait
+
+`src/components/brand/NoorPortraitArt.tsx` — original vector artwork of an
+adult South Asian woman in a dupatta, drawn for this product. Deliberately an
+illustration rather than a photoreal render: Noor is fictional, and a photoreal
+face invites a member to believe there is a woman behind it. No real person is
+referenced, no medical coat, no clinical setting.
+
+It appears on Meet Noor, the session gate, the live session, the session
+summary and the dashboard's Talk-to-Noor card. The orb remains only as an
+audio/level indicator and on pre-auth marketing screens. **The portrait never
+animates** — Stage 3 excludes fake lip sync, so the ring moves and the face
+does not.
+
+A designed raster portrait can take over: drop the files into
+`public/images/noor/` and set `VITE_NOOR_PORTRAIT_ASSET=true`.
+
+### Evaluating the conversation
+
+`src/noor/eval/` holds **36 semantic fixtures** — 10 English, 10 Urdu, 10 mixed
+Urdu-English, plus continuity, correction, interruption, memory-recall,
+deleted-memory, no-memory and rejected-coping cases.
+
+Criteria are **concepts, never wording**. A fixture says a reply must engage
+with "the interview" (satisfied by *interview*, *panel*, *tomorrow's meeting*)
+and must not mention "an anxiety disorder". A test asserts no concept is long
+enough to be an exact-sentence assertion in disguise.
+
+`npm test` exercises the **grader**, not Noor: hand-written good and bad
+replies prove each check can actually fail. A suite whose checks cannot fail is
+worse than none, because it reports green.
+
+Whether Noor's real replies pass is a live question. See
+**[docs/LIVE_REALTIME_ACCEPTANCE.md](docs/LIVE_REALTIME_ACCEPTANCE.md)** —
+currently **PENDING, blocked by HTTP 429**.
+
 ### Safety during voice
 
 Safety screening runs on the transcripts the realtime model produces, so it
@@ -246,7 +352,8 @@ Copy `.env.example` to `.env`. Only `VITE_`-prefixed variables reach the browser
 | `VITE_FORCE_DEMO_MODE`        | `true` forces demo mode even with Supabase configured.                      |
 | `VITE_PUBLIC_SITE_URL`        | Site origin for auth email redirects (defaults to window origin).           |
 | `VITE_REALTIME_PROVIDER`      | `auto` (default) and `openai` both run realtime. `demo` runs the scripted interface harness — interface review only, never for members. |
-| `VITE_NOOR_VOICE`             | Client-side hint only; the server value decides.                            |
+| `VITE_NOOR_VOICE`             | Client-side hint only; the server value decides. No member-facing selector. |
+| `VITE_NOOR_PORTRAIT_ASSET`    | `true` only when a designed raster portrait exists; otherwise the vector artwork renders. |
 | `VITE_ENABLE_DEV_TOOLS`       | Voice audition + realtime diagnostics. **Must stay false in production.**   |
 | `VITE_ROUTER_MODE`            | `browser` (default) or `hash` for hosts with no SPA rewrite.                |
 
@@ -258,12 +365,16 @@ there is no `VITE_OPENAI_API_KEY`.
 Full instructions live in [`supabase/README.md`](supabase/README.md). Summary:
 
 1. Create a Supabase project and copy the URL + anon key into `.env`.
-2. **Apply the schema — the app does not work until you do.** Paste all of
-   `supabase/migrations/20260903000001_phase1_schema.sql` into the SQL editor
-   and run it (or `supabase db push`). It creates all 15 tables, every RLS
-   policy, the `handle_new_user` trigger, and the `start_wellbeing_session`,
-   `end_wellbeing_session` and `delete_my_account` functions. Safe to run more
-   than once.
+2. **Apply the schema — the app does not work until you do.** Run both
+   migrations, in order, in the SQL editor (or `supabase db push`):
+   - `20260903000001_phase1_schema.sql` — 15 tables, every RLS policy, the
+     `handle_new_user` trigger, and the `start_wellbeing_session`,
+     `end_wellbeing_session` and `delete_my_account` functions.
+   - `20260904000002_stage3_memory.sql` — `follow_up_items`,
+     `coping_preferences`, the `journal_ai_access` consent type and two new
+     memory categories.
+
+   Both are safe to run more than once, and order-independent after the first.
 3. In **Authentication → URL configuration** add your site URL and the
    `/verify-email` and `/reset-password` redirect URLs (local + Netlify).
 
@@ -349,6 +460,7 @@ misconfigured server must never tell a signed-in member to sign in:
 | Server has no Supabase config | `503 auth_not_configured` | “Noor is not available right now” — nothing stands in |
 | Supabase unreachable | `503 auth_unreachable` | As above |
 | No `OPENAI_API_KEY` | `503 openai_key_missing` | As above |
+| OpenAI rate-limited / no quota | `503 upstream_rate_limited` (upstream 429) | “Noor's voice service is busy right now… This is on our side, not yours” — never “check your connection” |
 | Upstream or network failure | `502` / fetch error | “We couldn't reach the voice service…” |
 
 The 503 cases do **not** offer "Continue by text": text goes through the same

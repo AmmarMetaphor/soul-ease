@@ -69,7 +69,7 @@ export function ConsentStep({ initial, busy, onBack, onAccept }: ConsentStepProp
           size="lg"
           disabled={!core}
           loading={busy}
-          onClick={() => onAccept({ core, transcriptStorage: transcript, longTermMemory: memory, assessmentStorage: assessment })}
+          onClick={() => onAccept({ core, transcriptStorage: transcript, longTermMemory: memory, assessmentStorage: assessment, journalAiAccess: false })}
         >
           {t('onboarding.consentAccept')}
         </Button>
