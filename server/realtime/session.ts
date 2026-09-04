@@ -283,9 +283,11 @@ async function readBody(request: Request): Promise<MintRequestBody> {
  * Status codes the client relies on:
  *   405 wrong method
  *   401 the CALLER is at fault — no token, or a token Supabase rejected
- *   503 this DEPLOYMENT cannot do realtime (no API key, or no way to verify
- *       members). The client tells the member the voice is unavailable and
- *       does not substitute anything for the conversation.
+ *   503 realtime is not available right now — either this DEPLOYMENT cannot do
+ *       it (no API key, or no way to verify members) or the upstream account is
+ *       rate-limited/out of quota (`reason: 'upstream_rate_limited'`). The
+ *       client tells the member the voice is unavailable and does not
+ *       substitute anything for the conversation.
  *   502 upstream refused or returned an unexpected payload
  *   200 { clientSecret, expiresAt, model, voice, callsUrl }
  *
@@ -360,6 +362,20 @@ export async function handleRealtimeSessionRequest(request: Request, env: Realti
   }
 
   if (!upstream.ok) {
+    // 429 is its own case. It means the account is rate-limited or has no
+    // quota — the service is genuinely unavailable right now, and it is not
+    // the member's connection, their sign-in, or a missing configuration.
+    // Reporting it as any of those sends them to fix something that is not
+    // theirs to fix. The status is passed on; the billing detail in the
+    // upstream body is not.
+    if (upstream.status === 429) {
+      return json(503, {
+        error: 'realtime_unavailable',
+        reason: 'upstream_rate_limited',
+        upstreamStatus: 429,
+        message: 'The voice service is temporarily unavailable.',
+      });
+    }
     // Deliberately does not forward the upstream body: it can echo request
     // content and we never want key-adjacent detail reaching the browser.
     return json(502, { error: 'upstream_failed', status: upstream.status });

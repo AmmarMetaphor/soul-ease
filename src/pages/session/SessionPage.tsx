@@ -421,6 +421,11 @@ function errorMessage(error: string | null, t: TranslateFn): string {
     case 'credential_failed':
     case 'not_implemented':
       return t('session.errVoiceUnavailable');
+    // Rate-limited or out of quota upstream. Temporary, and explicitly not the
+    // member's network — telling them to check their connection would send
+    // them to fix something that is working.
+    case 'service_unavailable':
+      return t('session.errServiceUnavailable');
     case 'connection_failed':
     case 'connection_lost':
       return t('session.errNetwork');
@@ -453,5 +458,10 @@ function needsSignIn(error: string | null): boolean {
  * scripted engine and let the member believe they were talking to Noor.
  */
 function voiceUnavailable(error: string | null): boolean {
-  return error === 'not_configured' || error === 'not_implemented' || error === 'credential_failed';
+  return (
+    error === 'not_configured' ||
+    error === 'not_implemented' ||
+    error === 'credential_failed' ||
+    error === 'service_unavailable'
+  );
 }

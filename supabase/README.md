@@ -24,8 +24,11 @@ Easiest route (no tooling to install):
 
 1. Supabase dashboard → **SQL Editor** → **New query**
 2. Paste the entire contents of
-   **`supabase/migrations/20260903000001_phase1_schema.sql`**
-3. **Run**
+   **`supabase/migrations/20260903000001_phase1_schema.sql`** → **Run**
+3. New query again, paste
+   **`supabase/migrations/20260904000002_stage3_memory.sql`** → **Run**
+   (Stage 3: `follow_up_items`, `coping_preferences`, the
+   `journal_ai_access` consent type, two new memory categories.)
 
 It is safe to run more than once — every object is created only if missing, and
 policies and triggers are replaced rather than duplicated. If a run fails part
@@ -40,7 +43,7 @@ supabase link --project-ref <your-project-ref>
 supabase db push
 ```
 
-Confirm afterwards — all 15 tables should be listed with `rls_enabled = t`:
+Confirm afterwards — all 17 tables should be listed with `rls_enabled = t`:
 
 ```sql
 select tablename, rowsecurity as rls_enabled
@@ -56,7 +59,8 @@ select tablename, rowsecurity as rls_enabled
 | `journal_entries` | `mood_checkins` |
 | `saved_coping_tools` | `safety_events` |
 | `usage_entitlements` | `human_support_requests` |
-| `practitioners` (ships empty) | |
+| `practitioners` (ships empty) | `follow_up_items` |
+| `coping_preferences` | |
 
 ## 3. Configure Auth
 

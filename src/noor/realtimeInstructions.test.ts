@@ -1,18 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { buildAuditionInstructions, buildNoorRealtimeInstructions, safetyStateInstruction, type NoorSessionContext } from './realtimeInstructions';
+import {
+  buildAuditionInstructions,
+  buildNoorRealtimeInstructions,
+  safetyStateInstruction,
+  EMPTY_SESSION_CONTEXT,
+  SPEC_SECTIONS,
+  type NoorSessionContext,
+} from './realtimeInstructions';
 
 function context(overrides: Partial<NoorSessionContext> = {}): NoorSessionContext {
-  return {
-    displayName: null,
-    preferredLanguage: 'en',
-    memoryLines: [],
-    goals: [],
-    recentActions: [],
-    lastSessionGist: null,
-    openGently: false,
-    firstSession: true,
-    ...overrides,
-  };
+  return { ...EMPTY_SESSION_CONTEXT, ...overrides };
 }
 
 describe('Noor realtime instructions', () => {
@@ -234,5 +231,149 @@ describe('audition instructions', () => {
     expect(text).toContain('Soul Ease AI Wellbeing Guide');
     expect(text).toMatch(/Read the line the developer sends you, exactly as written/);
     expect(text).toMatch(/do not ask a question afterwards/);
+  });
+});
+
+/**
+ * Stage 3 additions: the specification is split into modules, and the new
+ * continuity rules (corrections, follow-ups, rejected coping tools, journal
+ * privacy) must actually reach the model.
+ */
+describe('specification composition', () => {
+  it('emits every declared section, in order', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    let cursor = -1;
+    for (const heading of SPEC_SECTIONS) {
+      const at = text.indexOf(heading);
+      expect(at, `missing section ${heading}`).toBeGreaterThan(-1);
+      expect(at, `section out of order: ${heading}`).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+  });
+
+  it('puts answering the member before any style or method rule', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    const responding = text.indexOf('# Answering what they actually said');
+    expect(responding).toBeLessThan(text.indexOf('# How you speak'));
+    expect(responding).toBeLessThan(text.indexOf('# Approaches you may draw on'));
+  });
+
+  it('is identical for voice and text — there is one Noor', () => {
+    // Nothing in the composition branches on interaction mode.
+    const ctx = context({ firstSession: false, displayName: 'Sana' });
+    expect(buildNoorRealtimeInstructions(ctx)).toBe(buildNoorRealtimeInstructions({ ...ctx }));
+  });
+});
+
+describe('corrections and continuity', () => {
+  it('requires a correction to displace the earlier reading entirely', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    expect(text).toContain('# When they correct you');
+    expect(text).toMatch(/they are right, immediately and without argument/);
+    expect(text).toMatch(/Drop your earlier reading completely/);
+    expect(text).toMatch(/do not fold it back in later/);
+  });
+
+  it('treats an interruption as potentially carrying a correction', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    expect(text).toMatch(/Whatever they say while cutting across you outranks/);
+  });
+
+  it('carries the internal progression without narrating it', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    expect(text).toContain('# Where you are in the conversation');
+    for (const stage of ['LISTENING', 'UNDERSTANDING', 'CLARIFYING', 'REFLECTING', 'OPTIONAL INTERVENTION', 'ACTION']) {
+      expect(text).toContain(stage);
+    }
+    expect(text).toMatch(/The member never hears about it/);
+    expect(text).toMatch(/staying at 1 and 2|may stay at 1 and 2/);
+  });
+});
+
+describe('memory-driven behaviour', () => {
+  it('names follow-up items without turning them into an obligation', () => {
+    const text = buildNoorRealtimeInstructions(
+      context({ firstSession: false, followUps: ['how the conversation with their partner went'] }),
+    );
+    expect(text).toContain('how the conversation with their partner went');
+    expect(text).toMatch(/Raise at most one of these/);
+    expect(text).toMatch(/never treat it as an obligation they owe you/);
+    // And the opening must not lead with it.
+    expect(text).toMatch(/Do not open with a follow-up item or a goal/);
+  });
+
+  it('forbids re-suggesting an approach the member said did not help', () => {
+    const text = buildNoorRealtimeInstructions(
+      context({ firstSession: false, unhelpfulTools: ['box breathing'], helpfulTools: ['a short walk'] }),
+    );
+    expect(text).toMatch(/already told you these did NOT help: box breathing/);
+    expect(text).toMatch(/Do not suggest them again/);
+    expect(text).toContain('a short walk');
+  });
+
+  it('says the journal is private when access was not granted', () => {
+    const text = buildNoorRealtimeInstructions(context({ firstSession: false, journalAccessAllowed: false }));
+    expect(text).toMatch(/Their journal is private and you cannot see it/);
+    expect(text).toMatch(/Never imply that you can/);
+  });
+
+  it('treats permitted journal content as confidential rather than quotable', () => {
+    const text = buildNoorRealtimeInstructions(
+      context({ firstSession: false, journalAccessAllowed: true, journalLines: ['Felt calmer after the walk'] }),
+    );
+    expect(text).toContain('Felt calmer after the walk');
+    expect(text).toMatch(/only if the member raises the subject themselves/);
+    expect(text).toMatch(/never quote them back/);
+    expect(text).not.toMatch(/journal is private and you cannot see it/);
+  });
+
+  it('states that nothing outside the memory section is known', () => {
+    const text = buildNoorRealtimeInstructions(context({ firstSession: false }));
+    expect(text).toMatch(/Nothing outside this section is remembered/);
+  });
+});
+
+describe('safety outranks personalisation', () => {
+  it('forbids memory being used to discount a present signal', () => {
+    const text = buildNoorRealtimeInstructions(
+      context({ firstSession: false, memoryLines: ['They tend to catastrophise about work'] }),
+    );
+    expect(text).toMatch(/Nothing you remember about this member may be used to soften, explain away or discount/);
+    expect(text).toMatch(/Take the present moment at face value/);
+    // Safety must appear after the memory section it overrides.
+    expect(text.indexOf('# Safety')).toBeGreaterThan(text.indexOf('# Memory'));
+  });
+
+  it('does not require certainty before taking something seriously', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    expect(text).toMatch(/Ambiguity is a reason to ask, not a reason to carry on/);
+  });
+});
+
+describe('worked contrasts', () => {
+  it('gives the member turn and what to engage with, never a reply to copy', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    expect(text).toContain('# Worked contrasts');
+    expect(text).toMatch(/Member: I have a presentation tomorrow/);
+    expect(text).toMatch(/Engage with: .*fear of freezing/);
+    expect(text).toMatch(/Do not: .*inventing distress|Do not: .*naming an anxiety disorder/);
+    expect(text).toMatch(/No reply is written out/);
+  });
+
+  it('still contains no quoted sentence Noor could read aloud', () => {
+    const text = buildNoorRealtimeInstructions(
+      context({ firstSession: false, followUps: ['x'], journalAccessAllowed: true, journalLines: ['y'] }),
+    );
+    expect([...text.matchAll(/"[^"]{12,}[.?!]"/g)].map((m) => m[0])).toEqual([]);
+  });
+});
+
+describe('goals language', () => {
+  it('forbids streak, target and failure framing', () => {
+    const text = buildNoorRealtimeInstructions(context());
+    expect(text).toContain('# Goals and follow-ups');
+    expect(text).toMatch(/Never frame a goal as a test, a streak, a target/);
+    expect(text).toMatch(/No "you promised"/);
+    expect(text).toMatch(/not a failure of the person/);
   });
 });

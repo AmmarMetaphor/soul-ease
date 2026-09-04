@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { bandKey } from '@/assessments/components/AssessmentResult';
-import { NoorOrb } from '@/components/brand/NoorOrb';
+import { NoorPortrait } from '@/components/brand/NoorPortrait';
 import { MoodGlyph, MoodPicker } from '@/components/MoodPicker';
 import { Badge } from '@/components/ui/Badge';
 import { Button, LinkButton } from '@/components/ui/Button';
@@ -94,7 +94,7 @@ export function DashboardPage() {
       {decision?.allowanceExhausted ? (
         <section className="relative overflow-hidden rounded-3xl bg-emerald-800 p-6 text-ivory-50 sm:p-8 grain">
           <div className="relative z-10 flex flex-col gap-6 sm:flex-row sm:items-center">
-            <NoorOrb state="paused" size="sm" />
+            <NoorPortrait size="md" />
             <div className="flex-1">
               <h2 className="text-2xl font-medium">{t('dashboard.upgradeTitle')}</h2>
               <p className="mt-2 max-w-xl text-sm leading-relaxed text-ivory-50/80">{t('dashboard.upgradeBody')}</p>
@@ -116,7 +116,7 @@ export function DashboardPage() {
           className="group relative flex w-full items-center gap-5 overflow-hidden rounded-3xl bg-emerald-800 p-6 text-start text-ivory-50 shadow-lift transition-transform hover:-translate-y-0.5 motion-reduce:hover:translate-y-0 sm:gap-8 sm:p-8 grain"
         >
           <div className="relative z-10 shrink-0">
-            <NoorOrb state="ready" size="md" />
+            <NoorPortrait size="lg" ambient />
           </div>
           <div className="relative z-10 flex-1">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ivory-50/70">Noor · {t('common.aiGuide')}</p>

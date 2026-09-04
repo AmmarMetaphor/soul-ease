@@ -55,6 +55,12 @@ export const env = {
     const raw = import.meta.env.VITE_REALTIME_PROVIDER?.trim();
     return raw === 'demo' || raw === 'openai' ? raw : 'auto';
   })(),
+  /**
+   * Whether a designed raster portrait exists at
+   * public/images/noor/noor-portrait.webp. Off by default so a missing asset
+   * is never requested — Noor's original vector artwork renders instead.
+   */
+  noorPortraitAsset: readBool(import.meta.env.VITE_NOOR_PORTRAIT_ASSET),
   isDev: import.meta.env.DEV,
   /**
    * Developer tools (voice audition, realtime diagnostics). On in dev builds;

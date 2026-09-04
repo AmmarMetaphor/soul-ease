@@ -13,16 +13,19 @@ export function Card({ className, children, ...rest }: HTMLAttributes<HTMLDivEle
 interface CardHeaderProps {
   eyebrow?: string;
   title: ReactNode;
+  /** One line under the title, for a section that needs explaining. */
+  subtitle?: ReactNode;
   action?: ReactNode;
   className?: string;
 }
 
-export function CardHeader({ eyebrow, title, action, className }: CardHeaderProps) {
+export function CardHeader({ eyebrow, title, subtitle, action, className }: CardHeaderProps) {
   return (
     <div className={cn('mb-4 flex items-start justify-between gap-3', className)}>
-      <div>
+      <div className="min-w-0">
         {eyebrow && <p className="eyebrow mb-1">{eyebrow}</p>}
         <h3 className="text-lg font-semibold text-ink-900">{title}</h3>
+        {subtitle && <p className="mt-1 text-sm leading-relaxed text-ink-500">{subtitle}</p>}
       </div>
       {action}
     </div>

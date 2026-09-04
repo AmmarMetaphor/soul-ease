@@ -105,6 +105,13 @@ export interface SessionSummary {
   createdAt: string;
 }
 
+/**
+ * Kinds of durable memory a session can propose.
+ *
+ * Mirrors the `memory_category` enum. Nothing here is saved automatically —
+ * the member reviews proposals on the session summary and only the survivors
+ * are written.
+ */
 export type MemoryCategory =
   | 'stressor'
   | 'relationship'
@@ -112,7 +119,21 @@ export type MemoryCategory =
   | 'coping_preference'
   | 'topic_to_revisit'
   | 'agreed_action'
-  | 'context';
+  | 'context'
+  | 'communication_preference'
+  | 'follow_up';
+
+export const MEMORY_CATEGORIES: MemoryCategory[] = [
+  'stressor',
+  'relationship',
+  'goal',
+  'coping_preference',
+  'topic_to_revisit',
+  'agreed_action',
+  'context',
+  'communication_preference',
+  'follow_up',
+];
 
 export interface MemoryItem {
   id: string;
@@ -198,6 +219,62 @@ export interface HumanSupportRequest {
   note: string | null;
   status: HumanSupportRequestStatus;
   createdAt: string;
+}
+
+export type FollowUpStatus = 'open' | 'raised' | 'closed';
+
+/**
+ * Something the member asked Noor to check back on.
+ *
+ * Created only with their agreement. `raisedAt` exists so Noor asks once and
+ * then lets it go: a follow-up is a kindness, not a debt the member owes.
+ */
+export interface FollowUpItem {
+  id: string;
+  userId: string;
+  prompt: string;
+  status: FollowUpStatus;
+  sourceSessionId: string | null;
+  /** Not raised before this time, when the member named a horizon. */
+  dueAfter: string | null;
+  raisedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewFollowUpItem {
+  prompt: string;
+  sourceSessionId?: string | null;
+  dueAfter?: string | null;
+}
+
+/**
+ * 'unknown' is the honest default for something suggested but never reported
+ * back on — distinct from 'not_tried', which the member actually told us.
+ */
+export type CopingOutcome = 'suggested' | 'tried_helpful' | 'tried_unhelpful' | 'not_tried' | 'unknown';
+
+/**
+ * What a member has told us about an approach. Its whole purpose is the
+ * negative case: never suggest again something they said did not help.
+ */
+export interface CopingPreference {
+  id: string;
+  userId: string;
+  toolSlug: string;
+  outcome: CopingOutcome;
+  note: string | null;
+  sourceSessionId: string | null;
+  suggestedAt: string;
+  reportedAt: string | null;
+  updatedAt: string;
+}
+
+export interface NewCopingPreference {
+  toolSlug: string;
+  outcome: CopingOutcome;
+  note?: string | null;
+  sourceSessionId?: string | null;
 }
 
 /* ─── Input shapes ─────────────────────────────────────────────────────── */

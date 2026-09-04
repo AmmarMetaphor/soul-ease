@@ -208,12 +208,26 @@ export class OpenAIRealtimeProvider implements RealtimeConversationProvider {
       throw new RealtimeError('connection_failed', 'Could not reach the Soul Ease server.', true);
     }
 
-    // 503: this deployment cannot do realtime (no API key, or no way to
-    // verify members). 404: no server function deployed at all. Both mean
-    // "no realtime here", which the session screen states plainly. Nothing
-    // stands in for the conversation.
-    if (response.status === 503 || response.status === 404) {
+    // 503: realtime is not available. Two shapes, told apart by the reason so
+    // the member is not sent to fix the wrong thing:
+    //   upstream_rate_limited → the account is throttled or out of quota. The
+    //     service is temporarily unavailable; trying later may well work.
+    //   anything else → this deployment cannot do realtime at all.
+    // 404: no server function deployed. Neither ever substitutes a stand-in
+    // conversation — the session screen says plainly that Noor is unavailable.
+    if (response.status === 503) {
+      const reason = await readReason(response);
+      throw reason === 'upstream_rate_limited'
+        ? new RealtimeError('service_unavailable', 'The voice service is temporarily unavailable.', true)
+        : new RealtimeError('not_configured', 'Realtime voice is not configured on this deployment.', true);
+    }
+    if (response.status === 404) {
       throw new RealtimeError('not_configured', 'Realtime voice is not configured on this deployment.', true);
+    }
+    // A 429 reaching the browser directly (a proxy or edge limiter rather than
+    // our own function) means the same thing to the member.
+    if (response.status === 429) {
+      throw new RealtimeError('service_unavailable', 'The voice service is temporarily unavailable.', true);
     }
 
     if (response.status === 401 || response.status === 403) {
