@@ -258,12 +258,20 @@ there is no `VITE_OPENAI_API_KEY`.
 Full instructions live in [`supabase/README.md`](supabase/README.md). Summary:
 
 1. Create a Supabase project and copy the URL + anon key into `.env`.
-2. Apply `supabase/migrations/20260903000001_phase1_schema.sql` (via
-   `supabase db push` or the SQL editor). It creates every table, RLS policy,
-   the `handle_new_user` trigger, and the `start_wellbeing_session`,
-   `end_wellbeing_session` and `delete_my_account` functions.
+2. **Apply the schema — the app does not work until you do.** Paste all of
+   `supabase/migrations/20260903000001_phase1_schema.sql` into the SQL editor
+   and run it (or `supabase db push`). It creates all 15 tables, every RLS
+   policy, the `handle_new_user` trigger, and the `start_wellbeing_session`,
+   `end_wellbeing_session` and `delete_my_account` functions. Safe to run more
+   than once.
 3. In **Authentication → URL configuration** add your site URL and the
    `/verify-email` and `/reset-password` redirect URLs (local + Netlify).
+
+Configuring the environment variables is not the same as provisioning the
+database. With the variables set but the schema missing, sign-in succeeds and
+then every screen fails with `Could not find the table 'public.<name>' in the
+schema cache` — that message means the API is reachable and empty, not that
+the credentials are wrong.
 
 ## Cloudflare deployment
 
