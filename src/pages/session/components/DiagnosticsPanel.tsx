@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { env } from '@/config/env';
-import { diagnostics, type DiagnosticEntry } from '@/realtime/diagnostics';
+import { diagnostics, type DiagnosticEntry, type RealtimeStatus } from '@/realtime/diagnostics';
 import { cn } from '@/lib/cn';
 
 interface DiagnosticsPanelProps {
@@ -30,9 +30,11 @@ const CHANNEL_TONE: Record<DiagnosticEntry['channel'], string> = {
  */
 export function DiagnosticsPanel(props: DiagnosticsPanelProps) {
   const [entries, setEntries] = useState<DiagnosticEntry[]>([]);
+  const [status, setStatus] = useState<RealtimeStatus>(diagnostics.statusSnapshot());
   const [open, setOpen] = useState(false);
 
   useEffect(() => diagnostics.subscribe(setEntries), []);
+  useEffect(() => diagnostics.subscribeStatus(setStatus), []);
 
   if (!env.devToolsEnabled) return null;
 
@@ -55,6 +57,37 @@ export function DiagnosticsPanel(props: DiagnosticsPanelProps) {
             <Row label="conversation" value={props.conversation} />
             <Row label="mic" value={props.micPermission} />
           </dl>
+
+          {/*
+            Is a realtime model actually answering, or is something local
+            doing it? Read top to bottom. `demoMode` true, or
+            `responseCreatedByRealtimeModel` stuck at 0 while turns climb,
+            means the replies are not the model's.
+          */}
+          <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-b border-ivory-100/15 pb-2">
+            <Row label="engine" value={status.engine} tone={status.engine === 'scripted_demo' ? 'bad' : undefined} />
+            <Row label="demoMode" value={yn(status.demoMode)} tone={status.demoMode ? 'bad' : 'good'} />
+            <Row
+              label="realtimeConnected"
+              value={yn(status.realtimeConnected)}
+              tone={status.realtimeConnected ? 'good' : 'bad'}
+            />
+            <Row label="currentUserTurnReceived" value={yn(status.currentUserTurnReceived)} />
+            <Row label="userTranscriptAvailable" value={yn(status.userTranscriptAvailable)} />
+            {/* Length only — a transcript's content is never shown here. */}
+            <Row label="lastUserTranscriptChars" value={String(status.lastUserTranscriptChars)} />
+            <Row label="conversationItemCreated" value={yn(status.conversationItemCreated)} />
+            <Row
+              label="responseCreatedByRealtimeModel"
+              value={String(status.responseCreatedByRealtimeModel)}
+              tone={status.conversationTurnCount > 0 && status.responseCreatedByRealtimeModel === 0 ? 'bad' : undefined}
+            />
+            <Row label="conversationTurnCount" value={String(status.conversationTurnCount)} />
+            <Row label="userTurnCount" value={String(status.userTurnCount)} />
+            <Row label="historyReseededTurns" value={String(status.historyReseededTurns)} />
+            <Row label="instructionChars" value={String(status.instructionChars)} />
+          </dl>
+
           <div className="mt-2 max-h-56 overflow-y-auto">
             {entries.length === 0 && <p className="text-ivory-100/50">no events yet</p>}
             {[...entries].reverse().map((entry, i) => (
@@ -79,11 +112,17 @@ export function DiagnosticsPanel(props: DiagnosticsPanelProps) {
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function yn(value: boolean): string {
+  return value ? 'yes' : 'no';
+}
+
+function Row({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'bad' }) {
   return (
     <>
-      <dt className="text-ivory-100/50">{label}</dt>
-      <dd className="truncate">{value}</dd>
+      <dt className="truncate text-ivory-100/50">{label}</dt>
+      <dd className={cn('truncate', tone === 'bad' && 'text-warn-100', tone === 'good' && 'text-emerald-300')}>
+        {value}
+      </dd>
     </>
   );
 }

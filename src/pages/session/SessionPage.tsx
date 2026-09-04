@@ -105,7 +105,11 @@ export function SessionPage() {
         <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5">
           <NoorPortrait size="md" className="mb-6 self-center" />
           <h1 className="text-center text-2xl font-medium text-ink-900">
-            {needsSignIn(state.error) ? t('session.signInTitle') : t('session.failedTitle')}
+            {needsSignIn(state.error)
+              ? t('session.signInTitle')
+              : voiceUnavailable(state.error)
+                ? t('session.voiceUnavailableTitle')
+                : t('session.failedTitle')}
           </h1>
           <p className="mt-2 text-center leading-relaxed text-ink-700">{errorMessage(state.error, t)}</p>
           <div className="mt-8 flex flex-col gap-2">
@@ -119,14 +123,25 @@ export function SessionPage() {
             ) : (
               <>
                 <Button onClick={() => void controller.retry()}>{t('session.tryAgain')}</Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    void controller.retry().then(() => controller.connect('text'));
-                  }}
-                >
-                  {t('session.continueByText')}
-                </Button>
+                {/*
+                  Typing only helps when the connection itself might work.
+                  When Noor's voice is unavailable on this deployment, text
+                  goes through the same connection and fails the same way, so
+                  offering it would just be a second dead end.
+                */}
+                {!voiceUnavailable(state.error) && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      void controller.retry().then(() => controller.connect('text'));
+                    }}
+                  >
+                    {t('session.continueByText')}
+                  </Button>
+                )}
+                <LinkButton to={ROUTES.dashboard} variant="secondary">
+                  {t('summary.returnHome')}
+                </LinkButton>
                 <Button variant="ghost" onClick={() => void finish()}>
                   {t('session.endSafely')}
                 </Button>
@@ -177,8 +192,16 @@ export function SessionPage() {
             {t('session.reconnecting')}
           </InlineNotice>
         )}
-        {state.notice === 'demo' && <p className="text-center text-xs text-ink-500">{t('session.demoNotice')}</p>}
-        {state.notice === 'fallback' && <p className="text-center text-xs text-warn-600">{t('session.fallbackNotice')}</p>}
+        {/*
+          Not a footnote. If a scripted harness is answering rather than Noor,
+          that is the single most important thing on the screen — it decides
+          whether anything said here should be believed.
+        */}
+        {state.notice === 'demo' && (
+          <InlineNotice tone="warn" className="text-center text-xs">
+            {t('session.demoNotice')}
+          </InlineNotice>
+        )}
         <MicNotice micPermission={state.micPermission} capabilities={state.capabilities} mode={state.mode} />
         {state.error && !reconnecting && (
           <InlineNotice tone="warn" className="text-xs">
@@ -422,4 +445,13 @@ function errorMessage(error: string | null, t: TranslateFn): string {
 /** Signing in again only helps when that is genuinely the problem. */
 function needsSignIn(error: string | null): boolean {
   return error === 'not_signed_in' || error === 'session_expired';
+}
+
+/**
+ * This deployment cannot hold a conversation at all — no realtime credentials,
+ * or no endpoint. Said plainly, because the alternative once was to start a
+ * scripted engine and let the member believe they were talking to Noor.
+ */
+function voiceUnavailable(error: string | null): boolean {
+  return error === 'not_configured' || error === 'not_implemented' || error === 'credential_failed';
 }

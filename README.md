@@ -30,6 +30,7 @@ member can interrupt her mid-sentence. See
 - [Quick start (demo mode)](#quick-start-demo-mode)
 - [Realtime voice architecture](#realtime-voice-architecture)
 - [Environment variables](#environment-variables)
+- [Verifying the conversation](#verifying-the-conversation)
 - [Supabase setup](#supabase-setup)
 - [Cloudflare deployment](#cloudflare-deployment)
 - [Netlify deployment](#netlify-deployment)
@@ -64,11 +65,16 @@ Open http://localhost:5173. With no Supabase variables set the app runs in
 localStorage and nothing leaves the device. Use **"Continue as demo member"** on
 the sign-in page for an instant account, then walk through onboarding.
 
-Without `OPENAI_API_KEY` the realtime endpoint answers 503, the app says so
-plainly on the session screen, and a scripted demo guide stands in so the
-product can still be reviewed. **Once the key is configured, live realtime
-audio always takes priority** — the demo guide never speaks over a working
-realtime connection.
+Without `OPENAI_API_KEY` the realtime endpoint answers 503 and the session
+screen says plainly that Noor is not available. **Nothing stands in for the
+conversation.** Everything else — safety resources, journal, goals, toolkit,
+history — keeps working.
+
+To review the session *interface* with no credentials at all, build with
+`VITE_REALTIME_PROVIDER=demo`. That runs a scripted harness which replies from
+fixed line pools in the browser's own voice, and says so in the session UI on
+every turn. It is for looking at layout and states, not for holding a
+conversation — see [Why there is no scripted stand-in](#why-there-is-no-scripted-stand-in).
 
 ## Realtime voice architecture
 
@@ -133,6 +139,78 @@ Developers can compare candidates at `/app/dev/voice` (guarded by
 `VITE_ENABLE_DEV_TOOLS`), which speaks identical English, Urdu and mixed lines
 through each voice on its own short session.
 
+### Why there is no scripted stand-in
+
+Noor's replies come from the realtime model reading what the member actually
+said. There is no rule-based conversation engine in the product, and none may
+be substituted when realtime is unavailable.
+
+This is a rule with a history. A scripted engine used to stand in whenever the
+token endpoint reported that the deployment could not do realtime. It chose a
+reply from small pre-written pools using a topic regex, so it would answer a
+break-up with the line it kept for overthinking, and answer "I'm actually okay
+today" as though something were wrong. It spoke through browser
+`speechSynthesis`. On screen it was a single grey line of small print. Members
+had that conversation believing Noor was listening to them, and what they
+noticed was that she said nearly the same thing whatever they told her.
+
+Three things now hold the rule in place:
+
+- **One entry point.** `createRealtimeProvider()` reaches the scripted harness
+  only when `VITE_REALTIME_PROVIDER=demo`. No missing credential, failed
+  connection, absent Supabase, or other runtime condition can select it.
+- **Not in the bundle.** The harness loads through a dynamic import that a
+  default build proves dead and drops. `npm run check:no-scripted-replies`
+  fails the build if a pre-written line reaches `dist/`.
+- **Never silent.** A `demo` build states in the session UI, on every turn,
+  that the replies are pre-written examples and not Noor.
+
+A realtime connection that cannot be established is reported as such: *"Noor is
+not available right now"*, with the reason, an explanation that it is not the
+member's fault, and the rest of the product still working. An honest closed door
+is better than a room with a recording in it.
+
+### Answering the member, not the topic
+
+Two members who mention work stress must not receive the same reply. The
+instruction block in `src/noor/realtimeInstructions.ts` opens with
+`# Answering what they actually said`, before style or method, and requires:
+
+- a concrete detail from the member's own turn (the event, the person, the
+  timing — "tomorrow", "three months", "after ten at night", "she");
+- the whole conversation carried forward, so a pronoun still resolves four
+  turns later and later turns add to earlier ones;
+- at most one question per turn, and consecutive turns doing different jobs;
+- taking a member at their word when they say they are fine;
+- saying plainly when a turn was not understood, rather than covering the gap
+  with a general question about stress.
+
+Openings are **described, never quoted**. A sample line in a system prompt gets
+spoken verbatim, and a member who returns three times to the same first
+sentence has learned that this is a recording. A test asserts the prompt
+contains no quoted sentence long enough to be read aloud as a line.
+
+### Preserving context within a session
+
+A realtime session's history lives on the server and dies with the session. A
+dropout used to mint a replacement and re-greet the member as a stranger, which
+looks identical to Noor ignoring everything she had been told.
+
+`reconnect()` now marks the new session as a continuation: the recent turns are
+re-seeded as conversation items before anything else is asked of the model, the
+opening greeting is suppressed, and the instruction block gains a `# Continuing`
+note. Bounded to the last 12 turns.
+
+Ordering is enforced rather than assumed. A typed turn becomes a
+`conversation.item.create` and a reply is requested only once the server
+acknowledges it with `conversation.item.created` (with a 2s fallback, because a
+member who typed something is owed an answer). Spoken turns are committed and
+answered by semantic VAD itself — the client sends no `response.create` for
+them, and never re-sends `session.update` between turns.
+
+An empty message sends nothing at all, and no placeholder is ever substituted
+for a turn that was not understood.
+
 ### Safety during voice
 
 Safety screening runs on the transcripts the realtime model produces, so it
@@ -149,8 +227,9 @@ Copy `.env.example` to `.env`. Only `VITE_`-prefixed variables reach the browser
 
 | Variable                         | Purpose                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------ |
-| `OPENAI_API_KEY`                 | Realtime voice. Absent → endpoint returns 503 and the app runs the demo guide.        |
+| `OPENAI_API_KEY`                 | Realtime voice. Absent → endpoint returns 503 and the app says Noor is unavailable.   |
 | `OPENAI_REALTIME_MODEL`          | Realtime model. Default `gpt-realtime-2.1`.                                           |
+| `OPENAI_TRANSCRIPTION_MODEL`     | Input transcription. Default `gpt-transcribe`, which accepts a list of languages.     |
 | `NOOR_VOICE`                     | Noor's voice; the server decides. Default `marin`.                                    |
 | `REALTIME_SECRET_TTL_SECONDS`    | Client-secret lifetime, 10–7200. Default `120`.                                       |
 | `SUPABASE_URL`                   | Used to verify the caller's JWT before minting a realtime credential.                 |
@@ -166,7 +245,7 @@ Copy `.env.example` to `.env`. Only `VITE_`-prefixed variables reach the browser
 | `VITE_FREE_SESSION_ALLOWANCE` | Free sessions before the upgrade placeholder (default `3`).                 |
 | `VITE_FORCE_DEMO_MODE`        | `true` forces demo mode even with Supabase configured.                      |
 | `VITE_PUBLIC_SITE_URL`        | Site origin for auth email redirects (defaults to window origin).           |
-| `VITE_REALTIME_PROVIDER`      | `auto` (default), `demo` (pin demo guide), `openai` (pin realtime).         |
+| `VITE_REALTIME_PROVIDER`      | `auto` (default) and `openai` both run realtime. `demo` runs the scripted interface harness — interface review only, never for members. |
 | `VITE_NOOR_VOICE`             | Client-side hint only; the server value decides.                            |
 | `VITE_ENABLE_DEV_TOOLS`       | Voice audition + realtime diagnostics. **Must stay false in production.**   |
 | `VITE_ROUTER_MODE`            | `browser` (default) or `hash` for hosts with no SPA rewrite.                |
@@ -179,12 +258,20 @@ there is no `VITE_OPENAI_API_KEY`.
 Full instructions live in [`supabase/README.md`](supabase/README.md). Summary:
 
 1. Create a Supabase project and copy the URL + anon key into `.env`.
-2. Apply `supabase/migrations/20260903000001_phase1_schema.sql` (via
-   `supabase db push` or the SQL editor). It creates every table, RLS policy,
-   the `handle_new_user` trigger, and the `start_wellbeing_session`,
-   `end_wellbeing_session` and `delete_my_account` functions.
+2. **Apply the schema — the app does not work until you do.** Paste all of
+   `supabase/migrations/20260903000001_phase1_schema.sql` into the SQL editor
+   and run it (or `supabase db push`). It creates all 15 tables, every RLS
+   policy, the `handle_new_user` trigger, and the `start_wellbeing_session`,
+   `end_wellbeing_session` and `delete_my_account` functions. Safe to run more
+   than once.
 3. In **Authentication → URL configuration** add your site URL and the
    `/verify-email` and `/reset-password` redirect URLs (local + Netlify).
+
+Configuring the environment variables is not the same as provisioning the
+database. With the variables set but the schema missing, sign-in succeeds and
+then every screen fails with `Could not find the table 'public.<name>' in the
+schema cache` — that message means the API is reachable and empty, not that
+the credentials are wrong.
 
 ## Cloudflare deployment
 
@@ -259,10 +346,98 @@ misconfigured server must never tell a signed-in member to sign in:
 | --- | --- | --- |
 | No bearer token sent | `401 no_token` | “You need to be signed in to start a live session.” |
 | Token rejected by Supabase | `401 token_rejected` | “Your session has expired. Please sign in again.” |
-| Server has no Supabase config | `503 auth_not_configured` | Voice unavailable — the conversation continues by text/demo |
-| Supabase unreachable | `503 auth_unreachable` | Voice unavailable — as above |
-| No `OPENAI_API_KEY` | `503 openai_key_missing` | Voice unavailable — as above |
+| Server has no Supabase config | `503 auth_not_configured` | “Noor is not available right now” — nothing stands in |
+| Supabase unreachable | `503 auth_unreachable` | As above |
+| No `OPENAI_API_KEY` | `503 openai_key_missing` | As above |
 | Upstream or network failure | `502` / fetch error | “We couldn't reach the voice service…” |
+
+The 503 cases do **not** offer "Continue by text": text goes through the same
+connection and would fail the same way, so offering it would be a second dead
+end. `Try again`, `Return home` and `End session safely` are offered instead.
+
+### Reading the realtime diagnostics
+
+With `VITE_ENABLE_DEV_TOOLS=true`, a **dev · realtime** panel sits bottom-left
+of the session screen. Its top block is the transport; the second block answers
+one question — *is a realtime model actually producing these replies?*
+
+| Field | What it tells you |
+| --- | --- |
+| `engine` | `openai_realtime_webrtc` or `scripted_demo` |
+| `demoMode` | `yes` means pre-written replies. Should be `no` for any member. |
+| `realtimeConnected` | Peer connection and data channel open |
+| `currentUserTurnReceived` | The member's turn reached the model (audio committed, or text item created) |
+| `userTranscriptAvailable` / `lastUserTranscriptChars` | A transcript arrived, and its length — never its content |
+| `conversationItemCreated` | The server confirmed the turn is in the conversation |
+| `responseCreatedByRealtimeModel` | Replies the model began. **Stuck at 0 while turns climb ⇒ the replies are not the model's.** |
+| `conversationTurnCount` / `userTurnCount` | Completed turns; the model is being given each turn |
+| `historyReseededTurns` | Turns restored after a reconnection |
+| `instructionChars` | Instruction block length, so an empty or truncated prompt is visible |
+
+No transcript content, no API key and no ephemeral secret is ever shown or
+logged — credential-shaped strings are scrubbed before an entry is stored, and
+the panel does not render in production.
+
+## Verifying the conversation
+
+Automated tests cover the mechanics (see `npm run validate`): provider
+selection, event ordering, reconnection with history, the prompt's rules, and
+that no pre-written line ships in a build. **Whether Noor actually responds to
+content is a judgement about language, so it needs a person and a real
+`OPENAI_API_KEY`** — these checks cannot be automated and have not been run in
+CI.
+
+Run each of these as a fresh session, with the diagnostics panel open. Confirm
+`engine: openai_realtime_webrtc`, `demoMode: no` and a rising
+`responseCreatedByRealtimeModel` throughout — otherwise you are not testing the
+model.
+
+**1. Five different openers.** Each in its own session, as the first thing you
+say:
+
+| # | Say | Her reply must |
+| --- | --- | --- |
+| A | “I have an important interview tomorrow and I'm worried I'll completely mess it up.” | be about the interview and its timing |
+| B | “My relationship ended three months ago and I keep thinking about her every night.” | be about the ending and the nights — never an "overthinking" reply |
+| C | “My manager keeps giving me work late in the evening and I'm getting exhausted.” | be about the manager and the late hours |
+| D | “My best friend moved abroad and the house just feels really quiet now.” | be about the friend leaving and the quiet — not generic "relationships" |
+| E | “Honestly I'm actually okay today. I just wanted somebody to talk to.” | accept that, and be company. No problem-hunting, no exercise. |
+
+Then read the five replies together. They must be five clearly different
+answers, each naming something only that member said. Any two that would swap
+without anyone noticing is a failure.
+
+**2. Accumulation over four turns.** One session:
+
+> “I've been really stressed about work.” → “It's mostly because of my
+> manager.” → “He messages me after 10 PM almost every night.” → “And then I
+> can't switch my brain off when I go to bed.”
+
+By the fourth turn she must be talking about the specific picture — the
+late-night messages and the sleep — not still asking what work is like.
+
+**3. Pronoun context.** “My sister has been going through a hard time.” →
+“I don't know how to help her.” She must know who *her* is, without asking.
+
+**4. Urdu.** Speak a few turns of ordinary Pakistani Urdu. Replies must be in
+natural conversational Urdu — not literary, not a news bulletin, not a literal
+translation.
+
+**5. Mixed Urdu-English.** “Mera kaam ka pressure bohat zyada hai aur main
+switch off nahi kar pata.” She must mix the same way, and must not flip to
+formal Urdu because one English word appeared.
+
+**6. Interruption keeps the corrected meaning.** Let her start answering, then
+cut in with “No, wait — that's not actually what I meant.” and say what you
+did mean. She must follow the correction, not finish her earlier point.
+
+**7. Reconnection.** Mid-conversation, drop the network for a few seconds and
+let it recover. She must **not** greet you again or ask what brought you here,
+and must still know what you were discussing. `historyReseededTurns` should be
+non-zero.
+
+If any of 1–7 fails, capture the diagnostics panel values and the turn that
+failed before changing the prompt: the mechanics are the more likely cause.
 
 ## Netlify deployment
 
@@ -296,7 +471,8 @@ misconfigured server must never tell a signed-in member to sign in:
 | `npm run typecheck` | Typecheck app + Netlify functions                       |
 | `npm run lint`      | ESLint (flat config, typescript-eslint, react-hooks)    |
 | `npm test`          | Vitest unit/component tests                             |
-| `npm run validate`  | typecheck + lint + test + build                         |
+| `npm run check:no-scripted-replies` | Fails if a pre-written Noor reply reached `dist/`       |
+| `npm run validate`  | typecheck + lint + test + build + no-scripted-replies   |
 
 ## Architecture
 
@@ -312,8 +488,10 @@ src/
   memory/         consent permissions (pure), memory-candidate generation
   noor/           Noor's identity + system instructions builder
   realtime/       vendor-neutral RealtimeConversationProvider
-                    DemoRealtimeProvider (Phase 1) · OpenAIRealtimeProvider (Phase 2 scaffold)
-  session/        useSessionController (orchestration), summaryBuilder
+                    OpenAIRealtimeProvider — the only engine that talks to members
+                    DemoRealtimeProvider — scripted interface harness, dynamic-imported,
+                      reachable only with VITE_REALTIME_PROVIDER=demo
+  session/        useSessionController (orchestration), summaryBuilder, topicTags
   toolkit/        exercise catalogue
   support/        practitioner placeholders (clearly labelled)
   components/     ui primitives, brand (NoorOrb), layouts, dev banner

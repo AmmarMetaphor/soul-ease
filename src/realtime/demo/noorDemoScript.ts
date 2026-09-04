@@ -1,16 +1,23 @@
 import type { ConcernId } from '@/data/types';
 import type { SafetyState } from '@/safety/types';
+import { detectTopic } from '@/session/topicTags';
 import type { DetectedLanguage } from '../types';
 import { detectLanguage } from './languageDetection';
 
 /**
- * Noor demo conversation engine.
+ * Scripted UI harness for the session interface — NOT a conversation engine.
  *
- * A scripted, rule-based stand-in for the Phase 2 realtime model. It follows
- * Noor's internal framework (check-in → listen → clarify → understand →
- * explore → maybe one approach → next step → summary → close) and mirrors the
- * member's language register. It is intentionally modest: it exists so the
- * product experience can be reviewed honestly, not to imitate a model.
+ * It replies from small pools of pre-written lines selected by a topic regex
+ * and a phase counter. It cannot understand a sentence, cannot refer to
+ * anything the member actually said beyond echoing a fragment, and will
+ * answer two completely different problems with nearly the same words. That
+ * is not a limitation to work around; it is what a rule-based script is.
+ *
+ * Its only legitimate use is reviewing the session interface with no
+ * credentials configured: layout, conversation states, barge-in affordances,
+ * transcript rendering, safety panel. It must never stand in for Noor for a
+ * real member, which is why it is reachable only through an explicit
+ * `VITE_REALTIME_PROVIDER=demo` build (see realtime/createProvider.ts).
  */
 
 export type DemoPhase =
@@ -49,24 +56,6 @@ export function createDemoState(preferredLanguage: 'en' | 'ur'): DemoEngineState
     fragments: [],
     safetyTurns: 0,
   };
-}
-
-/* ─── Topic detection ─────────────────────────────────────────────────── */
-
-const TOPIC_PATTERNS: Array<{ topic: ConcernId; re: RegExp }> = [
-  { topic: 'grief', re: /\b(died|passed away|death|funeral|lost my|miss (him|her|them)|intaqal|wafat|guzar gay|fout|janaza)\b|فوت|انتقال|وفات|گزر گ/i },
-  { topic: 'relationships', re: /\b(wife|husband|partner|marriage|married|divorce|in-?laws|saas|susraal|biwi|shohar|shadi|rishta|boyfriend|girlfriend|ammi|abbu|amma|abba|my (mother|father|brother|sister|family)|dost|friend)\b|بیوی|شوہر|شادی|رشتہ|امی|ابو|خاندان|دوست/i },
-  { topic: 'overthinking', re: /\b(overthink\w*|over-thinking|can'?t stop thinking|keep thinking|thoughts? (won'?t|don'?t) stop|loop|dimagh|sochta|sochti|soch|sochein)\b|سوچ|دماغ/i },
-  { topic: 'anxiety', re: /\b(anxious|anxiety|panic|nervous|on edge|worr(y|ied|ying)|ghabrahat|ghabra|dar lagta|darr|bechain)\b|گھبراہٹ|بےچین|ڈر/i },
-  { topic: 'low_mood', re: /\b(sad|down|depressed|low|empty|numb|hopeless|no energy|tired of everything|udaas|dil nahi|mann nahi|akela|alone|lonely)\b|اداس|اکیل|تنہا/i },
-  { topic: 'stress', re: /\b(stress(ed)?|pressure|deadline|boss|office|work|job|exam|kaam|tension|naukri|paise|money|bills?)\b|دباؤ|کام|نوکری|ٹینشن|پیسے/i },
-];
-
-export function detectTopic(text: string): ConcernId | null {
-  for (const { topic, re } of TOPIC_PATTERNS) {
-    if (re.test(text)) return topic;
-  }
-  return null;
 }
 
 /* ─── Small intent detectors ──────────────────────────────────────────── */

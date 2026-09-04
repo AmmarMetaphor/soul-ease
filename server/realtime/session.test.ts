@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_NOOR_VOICE,
   DEFAULT_REALTIME_MODEL,
+  DEFAULT_TRANSCRIPTION_MODEL,
   buildSessionConfig,
   handleRealtimeSessionRequest,
   resolveTtlSeconds,
   resolveVoice,
+  supportsLanguageList,
   type RealtimeEnv,
 } from './session';
 
@@ -97,8 +99,30 @@ describe('buildSessionConfig', () => {
     expect(model).toBe(DEFAULT_REALTIME_MODEL);
     expect(session.model).toBe(DEFAULT_REALTIME_MODEL);
     // Transcription exists for the transcript view, memory, summaries and safety.
-    expect(session.audio.input.transcription.model).toBe('gpt-4o-transcribe');
+    expect(session.audio.input.transcription.model).toBe(DEFAULT_TRANSCRIPTION_MODEL);
     expect(session.audio.input.transcription.languages).toEqual(['en', 'ur']);
+  });
+
+  /**
+   * A Pakistani member switches language inside a sentence. Both languages
+   * must be offered to transcription — pin one and the other degrades — and a
+   * mistranscribed turn reaches the model as words the member never said.
+   */
+  it('offers both languages to a transcription model that accepts a list', () => {
+    expect(supportsLanguageList(DEFAULT_TRANSCRIPTION_MODEL)).toBe(true);
+    const { session } = buildSessionConfig({ languages: ['ur', 'en'] }, BASE_ENV);
+    expect(session.audio.input.transcription.languages).toEqual(['ur', 'en']);
+    // Never a single pinned language, which would degrade the other.
+    expect(session.audio.input.transcription).not.toHaveProperty('language');
+  });
+
+  it('omits the language list for a model that does not support it', () => {
+    const env = { ...BASE_ENV, OPENAI_TRANSCRIPTION_MODEL: 'gpt-4o-transcribe' };
+    expect(supportsLanguageList('gpt-4o-transcribe')).toBe(false);
+    const { session } = buildSessionConfig({ languages: ['en', 'ur'] }, env);
+    expect(session.audio.input.transcription.model).toBe('gpt-4o-transcribe');
+    // Sending an unsupported parameter risks the whole mint being rejected.
+    expect(session.audio.input.transcription.languages).toBeUndefined();
   });
 
   it('honours a configured model', () => {

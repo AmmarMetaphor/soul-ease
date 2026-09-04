@@ -18,6 +18,11 @@
 export interface RealtimeEnv {
   OPENAI_API_KEY?: string;
   OPENAI_REALTIME_MODEL?: string;
+  /**
+   * Input transcription model. Defaults to one that accepts a list of
+   * possible languages, which is what Urdu-English code-switching needs.
+   */
+  OPENAI_TRANSCRIPTION_MODEL?: string;
   NOOR_VOICE?: string;
   /** Seconds the ephemeral secret stays valid. Kept short by design. */
   REALTIME_SECRET_TTL_SECONDS?: string;
@@ -34,6 +39,8 @@ export interface RealtimeEnv {
 export const DEFAULT_REALTIME_MODEL = 'gpt-realtime-2.1';
 export const DEFAULT_NOOR_VOICE = 'marin';
 export const DEFAULT_SECRET_TTL_SECONDS = 120;
+/** Supports a list of possible input languages — see supportsLanguageList. */
+export const DEFAULT_TRANSCRIPTION_MODEL = 'gpt-transcribe';
 
 const OPENAI_CLIENT_SECRETS_URL = 'https://api.openai.com/v1/realtime/client_secrets';
 const OPENAI_CALLS_URL = 'https://api.openai.com/v1/realtime/calls';
@@ -109,9 +116,11 @@ export function resolveTtlSeconds(env: RealtimeEnv): number {
 export function buildSessionConfig(body: MintRequestBody, env: RealtimeEnv) {
   const model = env.OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL;
   const voice = resolveVoice(body.voice, env);
+  const transcriptionModel = resolveTranscriptionModel(env);
   return {
     model,
     voice,
+    transcriptionModel,
     session: {
       type: 'realtime' as const,
       model,
@@ -120,9 +129,13 @@ export function buildSessionConfig(body: MintRequestBody, env: RealtimeEnv) {
       audio: {
         input: {
           transcription: {
-            // Multilingual transcription; Urdu and Roman-Urdu both arrive here.
-            model: 'gpt-4o-transcribe',
-            ...(body.languages && body.languages.length > 0 ? { languages: body.languages } : {}),
+            model: transcriptionModel,
+            // A multi-language hint, so Urdu, English and a sentence that
+            // switches between them mid-clause all transcribe correctly. Only
+            // sent to models that accept it — see resolveTranscriptionModel.
+            ...(supportsLanguageList(transcriptionModel) && body.languages && body.languages.length > 0
+              ? { languages: body.languages }
+              : {}),
           },
           noise_reduction: { type: 'near_field' as const },
           turn_detection: {
@@ -139,6 +152,28 @@ export function buildSessionConfig(body: MintRequestBody, env: RealtimeEnv) {
       },
     },
   };
+}
+
+/**
+ * Transcription models that accept a list of possible input languages.
+ *
+ * This matters more than it looks. Pinning a single `language` would be wrong
+ * for a Pakistani member — pin Urdu and their English clauses degrade, pin
+ * English and their Urdu does — and a hint sent to a model that does not
+ * support it is at best ignored. Members here switch language inside one
+ * sentence, and a mistranscribed turn reaches the model as something the
+ * member never said, which is one way a reply ends up answering nothing they
+ * recognise.
+ */
+const LANGUAGE_LIST_MODELS = ['gpt-transcribe', 'gpt-live-transcribe'];
+
+export function supportsLanguageList(transcriptionModel: string): boolean {
+  return LANGUAGE_LIST_MODELS.includes(transcriptionModel);
+}
+
+export function resolveTranscriptionModel(env: RealtimeEnv): string {
+  const configured = env.OPENAI_TRANSCRIPTION_MODEL?.trim();
+  return configured || DEFAULT_TRANSCRIPTION_MODEL;
 }
 
 interface VerifiedCaller {
@@ -221,6 +256,7 @@ export function readinessReport(env: RealtimeEnv) {
     unauthenticatedPreviewOptIn: previewOptIn,
     model: env.OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL,
     voice: resolveVoice(undefined, env),
+    transcriptionModel: resolveTranscriptionModel(env),
     missing,
   };
 }
@@ -248,7 +284,8 @@ async function readBody(request: Request): Promise<MintRequestBody> {
  *   405 wrong method
  *   401 the CALLER is at fault — no token, or a token Supabase rejected
  *   503 this DEPLOYMENT cannot do realtime (no API key, or no way to verify
- *       members). The client falls back to the demo guide and says so.
+ *       members). The client tells the member the voice is unavailable and
+ *       does not substitute anything for the conversation.
  *   502 upstream refused or returned an unexpected payload
  *   200 { clientSecret, expiresAt, model, voice, callsUrl }
  *
